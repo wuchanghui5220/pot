@@ -1,0 +1,4 @@
+ibdiagnet --pc -P all=1 --pm_pause_time 600 -r --get_phy_info --extended_speeds all --get_cable_info --cable_info_disconnected --reset_phy_info  --congestion_control --sharp --rail_validation --phy_cable_disconnected
+ibdiagnet --sc --extended_speeds all -P all=1 --pm_per_lane --get_cable_info --cable_info_disconnected --get_phy_info --routing --phy_cable_disconnected --rail_validation
+tar -zcvf ibdiagnet2_$(date +%Y%m%d).tgz /var/tmp/ibdiagnet2/*
+ibdiagnet --pc -P all=1 --reset_phy_info
