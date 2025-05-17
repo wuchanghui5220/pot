@@ -1,4 +1,3 @@
-root@aadmin:~/workspace/clusterkit/hpcx-v2.23-gcc-doca_ofed-ubuntu22.04-cuda12-x86_64/clusterkit/bin# cat core_to_hca_hgx100.sh
 #!/bin/bash
 # core_to_hca_hgx.sh - Custom mapping script for ConnectX-7 HCAs to core affinity
 #
