@@ -4,9 +4,10 @@
 # with unidirectional tests and specified parameters
 
 # Configuration
-HPCX_DIR="/root/workspace/clusterkit/hpcx-v2.23-gcc-doca_ofed-ubuntu22.04-cuda12-x86_64/"
-HOSTFILE="/root/workspace/clusterkit/hpcx-v2.23-gcc-doca_ofed-ubuntu22.04-cuda12-x86_64/hostfile.txt"
-CK_DIR="/root/workspace/clusterkit/hpcx-v2.23-gcc-doca_ofed-ubuntu22.04-cuda12-x86_64/clusterkit"
+HPCX_HOME="/root/workspace/clusterkit/hpcx-v2.23-gcc-doca_ofed-ubuntu22.04-cuda12-x86_64/"
+HPCX_DIR="$HPCX_HOME"
+HOSTFILE="$HPCX_HOME/hostfile.txt"
+CK_DIR="$HPCX_HOME/clusterkit"
 TEST_DURATION=1  # Traffic test duration in minutes
 PROCESSES_PER_NODE=8 # Number of processes per node
 OUTPUT_DIR="$(pwd)/clusterkit_results"
