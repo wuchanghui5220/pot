@@ -346,7 +346,7 @@ def main():
     # 命令行参数解析
     parser = argparse.ArgumentParser(description='IB LinkInfo Parser - 解析InfiniBand链路信息')
     parser.add_argument('ca_name', nargs='?', help='CA名称 (例如: mlx5_4)')
-    parser.add_argument('-o', '--output', help='输出文件名前缀 (默认: ib_linkinfo)')
+    parser.add_argument('-o', '--output', help='输出文件名前缀 (默认: iblinkinfo)')
     parser.add_argument('-c', '--config', help='配置文件路径 (类似Ansible hosts格式)')
     parser.add_argument('-g', '--groups', nargs='+', help='指定要查询的组名 (多个组用空格分隔)')
     parser.add_argument('--no-down-report', action='store_true', help='不生成Down状态统计表格')
@@ -399,7 +399,7 @@ def main():
 
     # 生成输出文件名
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    prefix = args.output if args.output else "ib_linkinfo"
+    prefix = args.output if args.output else "iblinkinfo"
 
     if args.ca_name:
         base_name = f"{prefix}_{args.ca_name}_{timestamp}"
