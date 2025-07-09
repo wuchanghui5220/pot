@@ -60,9 +60,20 @@ GOOS=linux GOARCH=amd64 go build -o ibportdowncheck ibportdowncheck.go
 ```ini
 # 叶子交换机组 (端口1-24)
 [leaf1-10:1-24]
+0xa088c203005759b8
+0xa088c20300578d78
+0xa088c203005798b8
 0xa088c20300579618
-0xa088c20300579620
-0xa088c20300579628
+0xa088c20300577f98
+0xa088c2030057a038
+0xa088c20300577718
+0xa088c20300513c6c
+0xa088c203005794d8
+0xa088c20300576cd8
+
+[leaf11-12:1-15]
+0xa088c20300579458
+0xa088c20300579518
 
 # 脊柱交换机组 (端口1-36) 
 [spine1-3:1-36]
@@ -77,6 +88,7 @@ GOOS=linux GOARCH=amd64 go build -o ibportdowncheck ibportdowncheck.go
 # 父组定义
 [pod:children]
 leaf1-10
+leaf11-12
 spine1-3
 spine4
 ```
