@@ -18,26 +18,26 @@ InfiniBand链路信息解析工具，用于分析IB网络拓扑、检测Down状�
 
 ```bash
 # 本地编译
-go build -o ibpdc ibportdowncheck.go
+go build -o ibportdowncheck ibportdowncheck.go
 
 # 交叉编译到Linux
-GOOS=linux GOARCH=amd64 go build -o ibpdc ibportdowncheck.go
+GOOS=linux GOARCH=amd64 go build -o ibportdowncheck ibportdowncheck.go
 ```
 
 ### 基本用法
 
 ```bash
 # 使用默认CA (mlx5_0)
-./ibpdc -c devices.conf -g leaf1-10
+./ibportdowncheck -c devices.conf -g leaf1-10
 
 # 指定特定CA
-./ibpdc -C mlx5_4 -c devices.conf -g spine1-3
+./ibportdowncheck -C mlx5_4 -c devices.conf -g spine1-3
 
 # 从文件读取数据
-./ibpdc -f iblinkinfo_output.txt -c devices.conf -g pod
+./ibportdowncheck -f iblinkinfo_output.txt -c devices.conf -g pod
 
 # 查看帮助
-./ibpdc --help
+./ibportdowncheck --help
 ```
 
 ## 命令行参数
@@ -104,19 +104,19 @@ spine4
 ### 1. 日常巡检
 ```bash
 # 检查特定组的连接状态
-./ibpdc -C mlx5_4 -c network.conf -g leaf1-10
+./ibportdowncheck -C mlx5_4 -c network.conf -g leaf1-10
 ```
 
 ### 2. 故障排查
 ```bash
 # 分析历史数据
-./ibpdc -f troubleshoot_data.txt -c network.conf -g pod --show-excluded
+./ibportdowncheck -f troubleshoot_data.txt -c network.conf -g pod --show-excluded
 ```
 
 ### 3. 批量检查
 ```bash
 # 检查所有组的状态
-./ibpdc -C mlx5_4 -c network.conf
+./ibportdowncheck -C mlx5_4 -c network.conf
 ```
 
 ## 统计信息示例
@@ -156,7 +156,7 @@ spine4
 
 1. **权限不足**
    ```bash
-   sudo ./ibpdc -C mlx5_4 -c devices.conf -g leaf1-10
+   sudo ./ibportdowncheck -C mlx5_4 -c devices.conf -g leaf1-10
    ```
 
 2. **CA不存在**
