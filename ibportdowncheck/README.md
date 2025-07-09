@@ -71,6 +71,7 @@ GOOS=linux GOARCH=amd64 go build -o ibportdowncheck ibportdowncheck.go
 0xa088c203005794d8
 0xa088c20300576cd8
 
+# 叶子交换机组 (端口1-15)
 [leaf11-12:1-15]
 0xa088c20300579458
 0xa088c20300579518
@@ -81,8 +82,8 @@ GOOS=linux GOARCH=amd64 go build -o ibportdowncheck ibportdowncheck.go
 0xa088c20300579638
 0xa088c20300579640
 
-# 特殊设备 (端口1-15)
-[spine4:1-15]
+# 脊柱交换机组 (端口1-24)
+[spine4:1-24]
 0xa088c20300579648
 
 # 父组定义
