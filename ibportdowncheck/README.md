@@ -86,12 +86,6 @@ GOOS=linux GOARCH=amd64 go build -o ibportdowncheck ibportdowncheck.go
 [spine4:1-24]
 0xa088c20300579648
 
-# 父组定义
-[pod:children]
-leaf1-10
-leaf11-12
-spine1-3
-spine4
 ```
 
 ### 配置语法说明
