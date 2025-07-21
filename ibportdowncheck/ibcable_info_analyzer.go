@@ -13,7 +13,7 @@ import (
 
 // 配置常量
 const (
-	DefaultInputFile  = "/var/tmp/ibdiagnet2/ibdiagne2.db_csv"
+	DefaultInputFile  = "/var/tmp/ibdiagnet2/ibdiagnet2.db_csv"
 	DefaultOutputFile = "cable_info_extracted.csv"
 	DefaultStatsFile  = "sn_statistics.txt"
 )
