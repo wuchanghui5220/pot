@@ -12,6 +12,7 @@ git clone https://github.com/wuchanghui5220/pot.git
 # 安装
 cd pot/paraperf/paraperf-offline
 ./install.sh
+```
 
 ### 方法二：离线安装
 ```bash
