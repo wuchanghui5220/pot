@@ -8,11 +8,10 @@ ParaPerf 是一个基于 iperf3 的并行网络性能测试工具，专为集群
 ```bash
 # 下载 ParaPerf
 git clone https://github.com/wuchanghui5220/pot.git
-cd pot/paraperf
 
-# 直接运行测试（会自动安装依赖）
-./paraperf.sh -u username -p password -f hosts.txt
-```
+# 安装
+cd pot/paraperf/paraperf-offline
+./install.sh
 
 ### 方法二：离线安装
 ```bash
