@@ -30,8 +30,8 @@
 ### 1. 获取项目
 
 ```bash
-git clone https://github.com/your-repo/paraperf.git
-cd paraperf
+git clone https://github.com/wuchanghui5220/pot.git
+cd pot/paraperf
 chmod +x *.sh
 ```
 
