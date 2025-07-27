@@ -128,10 +128,10 @@ ${SCRIPT_NAME} v${VERSION} - 并行网络性能测试工具
   8+线程   - 适用于40G/100G高速网络
 
 示例:
-  $0 -u admin -p password123 -f hosts.txt
-  $0 -u admin -p password123 -f hosts.txt -m ring -c 3 -d 30
-  $0 -u admin -p password123 -f hosts.txt -m star -o json -v
-  $0 -u admin -p password123 -f hosts.txt -m opposite -j 4 -d 60  # 25G网络4线程测试
+  $0 -u ubuntu -p password123 -f hosts.txt
+  $0 -u ubuntu -p password123 -f hosts.txt -m pair -c 3 -d 30
+  $0 -u ubuntu -p password123 -f hosts.txt -m star -o json -v
+  $0 -u ubuntu -p password123 -f hosts.txt -m opposite -j 4 -d 60  # 25G网络4线程测试
 
 EOF
 }
