@@ -7,8 +7,8 @@ ParaPerf 是一个基于 iperf3 的并行网络性能测试工具，专为集群
 ### 方法一：在线安装（推荐）
 ```bash
 # 下载 ParaPerf
-git clone https://github.com/your-repo/paraperf.git
-cd paraperf
+git clone https://github.com/wuchanghui5220/pot.git
+cd pot/paraperf
 
 # 直接运行测试（会自动安装依赖）
 ./paraperf.sh -u username -p password -f hosts.txt
@@ -114,7 +114,7 @@ sudo -l
 | ring | 环形测试，节点按顺序连接成环 | 基础连通性测试 |
 | star | 星形测试，所有节点连接到第一个节点 | 中心节点性能测试 |
 | pair | 对等测试，相邻节点两两配对 | 快速性能抽样 |
-
+| opposite | 对称测试，首尾配对测试 | 整体网络性能压测 |
 ## 常见问题
 
 ### 1. SSH连接失败
