@@ -30,6 +30,7 @@ DEFAULT_THREADS=1             # iperf3 parallel threads
 DEFAULT_PORT=5201
 DEFAULT_PROTOCOL="tcp"        # tcp, udp
 DEFAULT_OUTPUT_FORMAT="table" # table, json, csv
+DEFAULT_BIDIRECTIONAL=false   # bidirectional test
 
 # 全局变量
 USERNAME=""
@@ -42,6 +43,7 @@ IPERF3_THREADS=""
 IPERF3_PORT=""
 PROTOCOL=""
 OUTPUT_FORMAT=""
+BIDIRECTIONAL=false
 VERBOSE=false
 DRY_RUN=false
 FORCE_INSTALL=false
@@ -111,6 +113,7 @@ ${SCRIPT_NAME} v${VERSION} - 并行网络性能测试工具
   -P, --port PORT             iperf3端口 (默认: 5201)
   -t, --protocol PROTO        协议类型 [tcp|udp] (默认: tcp)
   -o, --output FORMAT         输出格式 [table|json|csv] (默认: table)
+  -b, --bidirectional         启用双向测试模式
   -v, --verbose               详细输出
   -n, --dry-run               试运行模式 (不执行实际测试)
   -F, --force-install         强制重新安装iperf3
@@ -134,6 +137,8 @@ ${SCRIPT_NAME} v${VERSION} - 并行网络性能测试工具
   $0 -u admin -p password123 -f hosts.txt -m ring -c 3 -d 30
   $0 -u admin -p password123 -f hosts.txt -m star -o json -v
   $0 -u admin -p password123 -f hosts.txt -m opposite -j 4 -d 60  # 25G网络4线程测试
+  $0 -u admin -p password123 -f hosts.txt -b                      # 双向测试
+  $0 -u admin -p password123 -f hosts.txt -m full -b -o csv       # 全连接双向测试，CSV输出
 
 EOF
 }
@@ -189,6 +194,10 @@ parse_arguments() {
                 OUTPUT_FORMAT="$2"
                 shift 2
                 ;;
+            -b|--bidirectional)
+                BIDIRECTIONAL=true
+                shift
+                ;;
             -v|--verbose)
                 VERBOSE=true
                 shift
@@ -228,6 +237,7 @@ parse_arguments() {
     IPERF3_PORT="${IPERF3_PORT:-$DEFAULT_PORT}"
     PROTOCOL="${PROTOCOL:-$DEFAULT_PROTOCOL}"
     OUTPUT_FORMAT="${OUTPUT_FORMAT:-$DEFAULT_OUTPUT_FORMAT}"
+    BIDIRECTIONAL="${BIDIRECTIONAL:-$DEFAULT_BIDIRECTIONAL}"
 }
 
 # =============================================================================
@@ -651,9 +661,13 @@ run_iperf3_test() {
     local rtt_result=$(sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$client_host" "ping -c 3 -W 2 $server_host 2>/dev/null | grep 'avg' | awk -F'/' '{print \$5}'" 2>/dev/null || echo "N/A")
     
     # 运行客户端测试
-    log DEBUG "从 $client_host 连接到 $server_host 执行测试 (端口: $unique_port, 线程数: $IPERF3_THREADS)" >&2
+    local test_mode_desc="单向"
+    [[ "$BIDIRECTIONAL" == true ]] && test_mode_desc="双向"
+    log DEBUG "从 $client_host 连接到 $server_host 执行${test_mode_desc}测试 (端口: $unique_port, 线程数: $IPERF3_THREADS)" >&2
+    
     local client_cmd="iperf3 -c $server_host -p $unique_port -t $TEST_DURATION -P $IPERF3_THREADS -J"
     [[ "$PROTOCOL" == "udp" ]] && client_cmd+=" -u"
+    [[ "$BIDIRECTIONAL" == true ]] && client_cmd+=" --bidir"
     
     local test_result=$(sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$client_host" "$client_cmd" 2>/dev/null)
     local exit_code=$?
@@ -755,9 +769,16 @@ parse_iperf3_result() {
     
     if [[ "$(cat "$result_file")" == "DRY_RUN_RESULT" ]]; then
         # 生成随机的模拟性能数据
-        local random_bandwidth=$((800 + RANDOM % 400))  # 800-1200 Mbps
-        local random_rtt=$(echo "scale=1; (5 + ($RANDOM % 20)) / 10" | bc)  # 0.5-2.5 ms
-        echo "SUCCESS|$random_bandwidth|Mbps|$random_rtt|ms"
+        if [[ "$BIDIRECTIONAL" == true ]]; then
+            local random_bandwidth1=$((800 + RANDOM % 400))  # 800-1200 Mbps
+            local random_bandwidth2=$((800 + RANDOM % 400))  # 800-1200 Mbps
+            local random_rtt=$(echo "scale=1; (5 + ($RANDOM % 20)) / 10" | bc)  # 0.5-2.5 ms
+            echo "SUCCESS|$random_bandwidth1|Mbps|$random_bandwidth2|Mbps|$random_rtt|ms"
+        else
+            local random_bandwidth=$((800 + RANDOM % 400))  # 800-1200 Mbps
+            local random_rtt=$(echo "scale=1; (5 + ($RANDOM % 20)) / 10" | bc)  # 0.5-2.5 ms
+            echo "SUCCESS|$random_bandwidth|Mbps|$random_rtt|ms"
+        fi
         return 0
     fi
     
@@ -765,16 +786,32 @@ parse_iperf3_result() {
     local error_check=$(jq -r '.error // "none"' "$result_file" 2>/dev/null)
     if [[ "$error_check" == "test_failed" ]]; then
         local exit_code=$(jq -r '.exit_code // "unknown"' "$result_file" 2>/dev/null)
-        echo "ERROR|测试失败 (退出码: $exit_code)|N/A|N/A|N/A"
+        if [[ "$BIDIRECTIONAL" == true ]]; then
+            echo "ERROR|测试失败 (退出码: $exit_code)|N/A|N/A|N/A|N/A|N/A"
+        else
+            echo "ERROR|测试失败 (退出码: $exit_code)|N/A|N/A|N/A"
+        fi
         return 1
     elif [[ "$error_check" == "server_start_failed" ]]; then
         local server=$(jq -r '.server // "unknown"' "$result_file" 2>/dev/null)
-        echo "ERROR|服务器启动失败 ($server)|N/A|N/A|N/A"
+        if [[ "$BIDIRECTIONAL" == true ]]; then
+            echo "ERROR|服务器启动失败 ($server)|N/A|N/A|N/A|N/A|N/A"
+        else
+            echo "ERROR|服务器启动失败 ($server)|N/A|N/A|N/A"
+        fi
         return 1
     fi
     
     # 解析JSON结果
-    local bandwidth_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum.bits_per_second // 0' "$result_file" 2>/dev/null)
+    if [[ "$BIDIRECTIONAL" == true ]]; then
+        # 双向测试：从streams中解析两个方向的带宽
+        # stream[0].sender=true表示客户端->服务器，stream[1].sender=false表示服务器->客户端
+        local bandwidth_forward_bps=$(jq -r '.end.streams[0].receiver.bits_per_second // 0' "$result_file" 2>/dev/null)
+        local bandwidth_reverse_bps=$(jq -r '.end.streams[1].receiver.bits_per_second // 0' "$result_file" 2>/dev/null)
+    else
+        # 单向测试：使用原有逻辑
+        local bandwidth_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum.bits_per_second // 0' "$result_file" 2>/dev/null)
+    fi
     
     # 获取延迟信息
     local rtt_ms="N/A"
@@ -788,17 +825,41 @@ parse_iperf3_result() {
         rtt_ms=$(jq -r '.end.streams[0].udp.mean_rtt // "N/A"' "$result_file" 2>/dev/null)
     fi
     
-    if [[ "$bandwidth_bps" == "0" ]] || [[ "$bandwidth_bps" == "null" ]]; then
-        echo "ERROR|测试失败或结果解析失败"
-        return 1
-    fi
-    
-    # 转换带宽单位
-    local bandwidth_mbps
-    if [[ "$bandwidth_bps" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        bandwidth_mbps=$(echo "scale=2; $bandwidth_bps / 1000000" | bc 2>/dev/null || echo "0")
+    if [[ "$BIDIRECTIONAL" == true ]]; then
+        # 双向测试验证
+        if [[ "$bandwidth_forward_bps" == "0" ]] || [[ "$bandwidth_forward_bps" == "null" ]] || 
+           [[ "$bandwidth_reverse_bps" == "0" ]] || [[ "$bandwidth_reverse_bps" == "null" ]]; then
+            echo "ERROR|双向测试失败或结果解析失败"
+            return 1
+        fi
+        
+        # 转换双向带宽单位
+        local bandwidth_forward_mbps bandwidth_reverse_mbps
+        if [[ "$bandwidth_forward_bps" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            bandwidth_forward_mbps=$(echo "scale=2; $bandwidth_forward_bps / 1000000" | bc 2>/dev/null || echo "0")
+        else
+            bandwidth_forward_mbps="0"
+        fi
+        
+        if [[ "$bandwidth_reverse_bps" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            bandwidth_reverse_mbps=$(echo "scale=2; $bandwidth_reverse_bps / 1000000" | bc 2>/dev/null || echo "0")
+        else
+            bandwidth_reverse_mbps="0"
+        fi
     else
-        bandwidth_mbps="0"
+        # 单向测试验证
+        if [[ "$bandwidth_bps" == "0" ]] || [[ "$bandwidth_bps" == "null" ]]; then
+            echo "ERROR|测试失败或结果解析失败"
+            return 1
+        fi
+        
+        # 转换单向带宽单位
+        local bandwidth_mbps
+        if [[ "$bandwidth_bps" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            bandwidth_mbps=$(echo "scale=2; $bandwidth_bps / 1000000" | bc 2>/dev/null || echo "0")
+        else
+            bandwidth_mbps="0"
+        fi
     fi
     
     # 格式化RTT，确保小数点前有0
@@ -806,7 +867,11 @@ parse_iperf3_result() {
         rtt_ms=$(printf "%.3f" "$rtt_ms" 2>/dev/null || echo "N/A")
     fi
     
-    echo "SUCCESS|$bandwidth_mbps|Mbps|$rtt_ms|ms"
+    if [[ "$BIDIRECTIONAL" == true ]]; then
+        echo "SUCCESS|$bandwidth_forward_mbps|Mbps|$bandwidth_reverse_mbps|Mbps|$rtt_ms|ms"
+    else
+        echo "SUCCESS|$bandwidth_mbps|Mbps|$rtt_ms|ms"
+    fi
 }
 
 format_output() {
@@ -833,9 +898,15 @@ format_table_output() {
     echo "           网络性能测试报告"
     echo "=========================================="
     echo
-    printf "%-4s %-10s %-6s %-10s %-6s %-15s %-15s %-12s %s\n" \
-        "ID" "服务器" "网卡" "客户端" "网卡" "服务器IP" "客户端IP" "带宽" "延迟"
-    echo "----------------------------------------------------------------------------------------------------------------------"
+    if [[ "$BIDIRECTIONAL" == true ]]; then
+        printf "%-4s %-10s %-6s %-10s %-6s %-15s %-15s %-12s %-12s %s\n" \
+            "ID" "服务器" "网卡" "客户端" "网卡" "服务器IP" "客户端IP" "上行带宽" "下行带宽" "延迟"
+        echo "-------------------------------------------------------------------------------------------------------------------------------------"
+    else
+        printf "%-4s %-10s %-6s %-10s %-6s %-15s %-15s %-12s %s\n" \
+            "ID" "服务器" "网卡" "客户端" "网卡" "服务器IP" "客户端IP" "带宽" "延迟"
+        echo "----------------------------------------------------------------------------------------------------------------------"
+    fi
     
     for result_line in "${test_results[@]}"; do
         IFS='|' read -r test_id server client result_file <<< "$result_line"
@@ -869,20 +940,39 @@ format_table_output() {
         
         # 解析测试结果
         local parsed_result=$(parse_iperf3_result "$result_file")
-        IFS='|' read -r status bandwidth unit rtt rtt_unit <<< "$parsed_result"
         
-        if [[ "$status" == "SUCCESS" ]]; then
-            printf "%-4s %-10s %-6s %-10s %-6s %-15s %-15s %-12s %s\n" \
-                "$test_id" "$server_hostname" "$server_iface" "$client_hostname" "$client_iface" "$server_ip" "$client_ip" \
-                "${bandwidth} ${unit}" "${rtt} ${rtt_unit}"
+        if [[ "$BIDIRECTIONAL" == true ]]; then
+            IFS='|' read -r status bandwidth_forward unit1 bandwidth_reverse unit2 rtt rtt_unit <<< "$parsed_result"
+            
+            if [[ "$status" == "SUCCESS" ]]; then
+                printf "%-4s %-10s %-6s %-10s %-6s %-15s %-15s %-12s %-12s %s\n" \
+                    "$test_id" "$server_hostname" "$server_iface" "$client_hostname" "$client_iface" "$server_ip" "$client_ip" \
+                    "${bandwidth_forward} ${unit1}" "${bandwidth_reverse} ${unit2}" "${rtt} ${rtt_unit}"
+            else
+                printf "%-4s %-10s %-6s %-10s %-6s %-15s %-15s %-12s %-12s %s\n" \
+                    "$test_id" "$server_hostname" "$server_iface" "$client_hostname" "$client_iface" "$server_ip" "$client_ip" \
+                    "FAILED" "FAILED" "N/A"
+            fi
         else
-            printf "%-4s %-10s %-6s %-10s %-6s %-15s %-15s %-12s %s\n" \
-                "$test_id" "$server_hostname" "$server_iface" "$client_hostname" "$client_iface" "$server_ip" "$client_ip" \
-                "FAILED" "N/A"
+            IFS='|' read -r status bandwidth unit rtt rtt_unit <<< "$parsed_result"
+            
+            if [[ "$status" == "SUCCESS" ]]; then
+                printf "%-4s %-10s %-6s %-10s %-6s %-15s %-15s %-12s %s\n" \
+                    "$test_id" "$server_hostname" "$server_iface" "$client_hostname" "$client_iface" "$server_ip" "$client_ip" \
+                    "${bandwidth} ${unit}" "${rtt} ${rtt_unit}"
+            else
+                printf "%-4s %-10s %-6s %-10s %-6s %-15s %-15s %-12s %s\n" \
+                    "$test_id" "$server_hostname" "$server_iface" "$client_hostname" "$client_iface" "$server_ip" "$client_ip" \
+                    "FAILED" "N/A"
+            fi
         fi
     done
     
-    echo "----------------------------------------------------------------------------------------------------------------------"
+    if [[ "$BIDIRECTIONAL" == true ]]; then
+        echo "-------------------------------------------------------------------------------------------------------------------------------------"
+    else
+        echo "----------------------------------------------------------------------------------------------------------------------"
+    fi
     echo
 }
 
@@ -996,7 +1086,9 @@ main() {
     initialize
     
     log INFO "开始网络性能测试..."
-    log INFO "配置: 用户=$USERNAME, 配对模式=$PAIRING_MODE, 并发数=$CONCURRENT_LIMIT, 线程数=$IPERF3_THREADS, 协议=$PROTOCOL"
+    local bidir_mode="单向"
+    [[ "$BIDIRECTIONAL" == true ]] && bidir_mode="双向"
+    log INFO "配置: 用户=$USERNAME, 配对模式=$PAIRING_MODE, 测试模式=$bidir_mode, 并发数=$CONCURRENT_LIMIT, 线程数=$IPERF3_THREADS, 协议=$PROTOCOL"
     
     # 加载主机列表
     local hosts=()
