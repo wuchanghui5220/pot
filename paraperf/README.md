@@ -54,11 +54,9 @@ vim hosts.txt
 # 快速测试 - 全连接模式
 ./paraperf.sh -u ubuntu -p your_password -f hosts.txt
 
-# 25G网络验证 - 对称模式
-./paraperf.sh -u admin -p password123 -f hosts.txt -m opposite -d 10 -c 1
+# 整体网络并发测试验证提升效率 - 对称模式
+./paraperf.sh -u ubuntu -p password123 -f hosts.txt -m opposite -d 10 -c 5
 
-# 并发测试 - 提升效率
-./paraperf.sh -u admin -p password123 -f hosts.txt -m full -c 5
 ```
 
 ## 📖 详细用法
@@ -78,6 +76,7 @@ vim hosts.txt
 | `-m` | `--pairing` | `full` | 配对模式 | `-m opposite` |
 | `-c` | `--concurrent` | `5` | 并发测试数量 | `-c 3` |
 | `-d` | `--duration` | `10` | 测试持续时间(秒) | `-d 30` |
+|`-j`  | ` --threads` | `1` | 并行线程数 | `-j 2` |
 | `-P` | `--port` | `5201` | iperf3端口 | `-P 5202` |
 | `-t` | `--protocol` | `tcp` | 协议类型 | `-t udp` |
 | `-o` | `--output` | `table` | 输出格式 | `-o json` |
