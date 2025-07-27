@@ -79,12 +79,14 @@ log() {
 }
 
 cleanup() {
+    # 只在脚本异常退出或明确调用时清理
     log DEBUG "清理临时文件..."
     [[ -d "$TEMP_DIR" ]] && rm -rf "$TEMP_DIR"
     log DEBUG "清理完成"
 }
 
-trap cleanup EXIT
+# 仅在异常情况下自动清理
+trap cleanup ERR
 
 # =============================================================================
 # 帮助和版本信息
@@ -128,10 +130,10 @@ ${SCRIPT_NAME} v${VERSION} - 并行网络性能测试工具
   8+线程   - 适用于40G/100G高速网络
 
 示例:
-  $0 -u ubuntu -p password123 -f hosts.txt
-  $0 -u ubuntu -p password123 -f hosts.txt -m pair -c 3 -d 30
-  $0 -u ubuntu -p password123 -f hosts.txt -m star -o json -v
-  $0 -u ubuntu -p password123 -f hosts.txt -m opposite -j 4 -d 60  # 25G网络4线程测试
+  $0 -u admin -p password123 -f hosts.txt
+  $0 -u admin -p password123 -f hosts.txt -m ring -c 3 -d 30
+  $0 -u admin -p password123 -f hosts.txt -m star -o json -v
+  $0 -u admin -p password123 -f hosts.txt -m opposite -j 4 -d 60  # 25G网络4线程测试
 
 EOF
 }
@@ -611,40 +613,60 @@ run_iperf3_test() {
     local result_file="${TEMP_DIR}/test_${test_id}_result.json"
     
     # 启动iperf3服务器
-    log DEBUG "在 $server_host 上启动iperf3服务器"
+    log DEBUG "在 $server_host 上启动iperf3服务器" >&2
     
     # 先清理旧进程
     sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$server_host" "pkill -f iperf3 2>/dev/null || true" &>/dev/null
     
+    # 为每个测试分配唯一端口，避免并发冲突
+    local unique_port=$((IPERF3_PORT + test_id))
+    
     # 启动服务器（在后台运行）
-    sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$server_host" "nohup iperf3 -s -p $IPERF3_PORT &" &>/dev/null &
+    sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$server_host" "nohup iperf3 -s -p $unique_port &" &>/dev/null &
     
     # 等待服务器启动
     sleep 4
     
-    # 验证服务器是否运行
-    if ! sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$server_host" "pgrep -f 'iperf3.*-s' >/dev/null" 2>/dev/null; then
-        log ERROR "启动iperf3服务器失败: $server_host"
-        return 1
+    # 验证服务器是否运行，增加重试机制
+    local server_started=false
+    for i in {1..3}; do
+        if sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$server_host" "pgrep -f 'iperf3.*-s' >/dev/null" 2>/dev/null; then
+            log DEBUG "iperf3服务器在 $server_host 上启动成功 (尝试 $i/3)" >&2
+            server_started=true
+            break
+        fi
+        log DEBUG "等待服务器启动... (尝试 $i/3)" >&2
+        sleep 2
+    done
+    
+    if [[ $server_started == false ]]; then
+        log ERROR "启动iperf3服务器失败: $server_host (3次尝试后仍然失败)" >&2
+        # 创建错误结果文件
+        echo '{"error": "server_start_failed", "server": "'$server_host'"}' > "$result_file"
+        echo "$result_file"
+        return 0
     fi
     
     # 测量RTT（通过ping）
     local rtt_result=$(sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$client_host" "ping -c 3 -W 2 $server_host 2>/dev/null | grep 'avg' | awk -F'/' '{print \$5}'" 2>/dev/null || echo "N/A")
     
     # 运行客户端测试
-    log DEBUG "从 $client_host 连接到 $server_host 执行测试 (线程数: $IPERF3_THREADS)"
-    local client_cmd="iperf3 -c $server_host -p $IPERF3_PORT -t $TEST_DURATION -P $IPERF3_THREADS -J"
+    log DEBUG "从 $client_host 连接到 $server_host 执行测试 (端口: $unique_port, 线程数: $IPERF3_THREADS)" >&2
+    local client_cmd="iperf3 -c $server_host -p $unique_port -t $TEST_DURATION -P $IPERF3_THREADS -J"
     [[ "$PROTOCOL" == "udp" ]] && client_cmd+=" -u"
     
     local test_result=$(sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$client_host" "$client_cmd" 2>/dev/null)
     local exit_code=$?
     
-    # 停止服务器
-    sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$server_host" "pkill -f iperf3 2>/dev/null || true" &>/dev/null
+    # 停止服务器（停止特定端口的iperf3进程）
+    sshpass -p "$PASSWORD" ssh $SSH_OPTS "$USERNAME@$server_host" "pkill -f 'iperf3.*-p $unique_port' 2>/dev/null || true" &>/dev/null
     
-    if [[ $exit_code -ne 0 ]]; then
-        log ERROR "测试失败 #$test_id: $client_host -> $server_host"
-        return 1
+    if [[ $exit_code -ne 0 ]] || [[ -z "$test_result" ]]; then
+        log ERROR "测试失败 #$test_id: $client_host -> $server_host (退出码: $exit_code)" >&2
+        # 创建错误结果文件，以便后续处理能够识别
+        echo '{"error": "test_failed", "exit_code": '$exit_code'}' > "$result_file"
+        echo "$result_file"
+        return 0  # 返回0以便继续处理其他测试
     fi
     
     # 保存结果，将RTT作为额外信息保存到单独文件
@@ -690,8 +712,10 @@ run_concurrent_tests() {
             local temp_file="${temp_result_files[i]}"
             
             {
-                local result=$(run_iperf3_test "$server" "$client" "$test_id" 2>/dev/null)
+                local result=$(run_iperf3_test "$server" "$client" "$test_id")
+                log DEBUG "测试 #$test_id 结果: $result" >&2
                 echo "$test_id|$server|$client|$result" > "$temp_file"
+                log DEBUG "写入临时文件: $temp_file" >&2
             } &
             
             batch_pids+=($!)
@@ -735,6 +759,18 @@ parse_iperf3_result() {
         local random_rtt=$(echo "scale=1; (5 + ($RANDOM % 20)) / 10" | bc)  # 0.5-2.5 ms
         echo "SUCCESS|$random_bandwidth|Mbps|$random_rtt|ms"
         return 0
+    fi
+    
+    # 检查是否是错误结果文件
+    local error_check=$(jq -r '.error // "none"' "$result_file" 2>/dev/null)
+    if [[ "$error_check" == "test_failed" ]]; then
+        local exit_code=$(jq -r '.exit_code // "unknown"' "$result_file" 2>/dev/null)
+        echo "ERROR|测试失败 (退出码: $exit_code)|N/A|N/A|N/A"
+        return 1
+    elif [[ "$error_check" == "server_start_failed" ]]; then
+        local server=$(jq -r '.server // "unknown"' "$result_file" 2>/dev/null)
+        echo "ERROR|服务器启动失败 ($server)|N/A|N/A|N/A"
+        return 1
     fi
     
     # 解析JSON结果
@@ -1047,6 +1083,9 @@ main() {
     fi
     
     log SUCCESS "测试完成！"
+    
+    # 清理临时文件
+    cleanup
 }
 
 # =============================================================================
