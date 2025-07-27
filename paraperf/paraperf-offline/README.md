@@ -179,13 +179,13 @@ iperf3 -c 192.168.1.10 -u -t 10
 
 ```bash
 # 基础测试
-./paraperf.sh -u admin -p mypass123 -f hosts.txt
+./paraperf.sh -u ubuntu -p mypass123 -f hosts.txt
 
 # 生产环境测试
-./paraperf.sh -u admin -p mypass123 -f hosts.txt -m full -d 60 -c 3 -o json -v
+./paraperf.sh -u ubuntu -p mypass123 -f hosts.txt -m full -d 60 -c 3 -o json -v
 
-# 快速验证
-./paraperf.sh -u admin -p mypass123 -f hosts.txt -m ring -d 10 -n
+# 整网性能压测
+./paraperf.sh -u ubuntu -p mypass123 -f hosts.txt -m opposite -d 30 -c 5 -j 2 
 ```
 
 ---
