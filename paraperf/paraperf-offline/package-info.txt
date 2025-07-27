@@ -1,0 +1,30 @@
+ParaPerf工具包离线安装包信息
+==========================
+
+创建时间: Fri Jul 25 17:47:53 UTC 2025
+目标架构: amd64
+Ubuntu版本: 22.04
+
+包含的工具:
+- iperf3: 网络性能测试工具
+- jq: JSON解析工具  
+- sshpass: SSH自动化认证工具
+- bc: 数学计算工具
+
+包含文件:
+-rw-r--r-- 1 ubuntu ubuntu 87638 Mar 24  2022 bc_1.07.1-3build1_amd64.deb
+-rw-r--r-- 1 ubuntu ubuntu 14642 Oct 16  2023 iperf3_3.9-1+deb11u1build0.22.04.1_amd64.deb
+-rw-r--r-- 1 ubuntu ubuntu 52510 Jul 21 12:26 jq_1.6-2.1ubuntu3.1_amd64.deb
+-rw-r--r-- 1 ubuntu ubuntu 81554 Oct 16  2023 libiperf0_3.9-1+deb11u1build0.22.04.1_amd64.deb
+-rw-r--r-- 1 ubuntu ubuntu 11716 Jan 30  2021 sshpass_1.09-1_amd64.deb
+
+安装方法:
+1. 将整个paraperf-offline目录复制到目标主机
+2. 运行: ./install.sh
+3. 或手动安装: sudo dpkg -i *.deb
+
+注意事项:
+- 确保目标主机与源主机架构相同
+- 如果遇到依赖问题，运行: sudo apt-get install -f
+- 支持Ubuntu 22.04.5及更新版本
+- 安装完成后即可运行ParaPerf脚本
