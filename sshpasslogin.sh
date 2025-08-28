@@ -2,7 +2,7 @@
 
 # SSH免密登录自动部署脚本
 # 作者: AI助手
-# 版本: 1.0
+# 版本: 1.1
 # 用法: ./sshlogin.sh -H <主机名/IP> -u <用户名> -p <密码>
 
 # 默认值
@@ -13,6 +13,7 @@ NEW_PASSWORD=""
 SSH_KEY_PATH="$HOME/.ssh/id_rsa"
 SSH_PORT=22
 DEVICE_TYPE="server"  # server 或 cumulus
+AUTO_YES=false  # 自动确认标志
 
 # 颜色定义
 RED='\033[0;31m'
@@ -55,17 +56,21 @@ SSH免密登录自动部署脚本
     -k, --key        SSH私钥路径 (默认: ~/.ssh/id_rsa)
     -t, --type       设备类型 (server|cumulus, 默认: server)
     -n, --new-pass   新密码 (仅用于cumulus设备首次登录)
+    -y, --yes        自动确认执行，无需用户交互
     -h, --help       显示此帮助信息
 
 示例:
     # 普通服务器
-    $0 -H server01 -u ubuntu -p nvidia
+    $0 -u ubuntu -p nvidia -H server01
+    
+    # 自动执行，无需确认
+    $0 -u ubuntu -p nvidia -y -H server01 
     
     # Cumulus交换机 (首次登录需要更改密码)
-    $0 -H spine02 -u cumulus -p cumulus -t cumulus -n newpassword
+    $0 -u cumulus -p cumulus -t cumulus -n AirDemo@123! -y -H Leaf01
     
     # 指定端口
-    $0 -H 192.168.1.100 -u root -p mypassword -P 2222
+    $0 -u root -p mypassword -P 2222 -y -H 192.168.1.100
 
 EOF
 }
@@ -350,6 +355,10 @@ while [[ $# -gt 0 ]]; do
             NEW_PASSWORD="$2"
             shift 2
             ;;
+        -y|--yes)
+            AUTO_YES=true
+            shift
+            ;;
         -h|--help)
             show_help
             exit 0
@@ -402,12 +411,16 @@ fi
 echo "=================================="
 echo
 
-# 确认执行
-read -p "确认执行部署？(y/N): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    log_info "部署已取消"
-    exit 0
+# 确认执行 - 如果使用了-y参数则自动确认
+if [ "$AUTO_YES" = true ]; then
+    log_info "自动确认模式，开始执行部署..."
+else
+    read -p "确认执行部署？(y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log_info "部署已取消"
+        exit 0
+    fi
 fi
 
 # 执行主函数
