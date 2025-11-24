@@ -865,9 +865,9 @@ rm -f "${OUTPUT_TMP}"
 
 # Extract output directory name from output (only the timestamp directory, not full path)
 # Example: "Output directory: /tmp/hpcx.../20251124_071936/" -> "20251124_071936"
-OUTPUT_DIR=$(echo "${OUTPUT}" | grep "Output directory:" | tail -1 | awk '{print $NF}' | sed 's:/$::' | xargs basename)
+OUTPUT_DIR_ORIG=$(echo "${OUTPUT}" | grep "Output directory:" | tail -1 | awk '{print $NF}' | sed 's:/$::' | xargs basename)
 
-if [ -z "${OUTPUT_DIR}" ]; then
+if [ -z "${OUTPUT_DIR_ORIG}" ]; then
     log_always "Warning: could not get output directory name"
     log_always "=========================================="
     log_always "Benchmark completed (results not downloaded)"
@@ -875,9 +875,43 @@ if [ -z "${OUTPUT_DIR}" ]; then
     exit 0
 fi
 
+# Build descriptive output directory name
+# Get first and last host from hostfile
+FIRST_HOST=$(head -1 "${HOSTFILE_PATH}")
+LAST_HOST=$(tail -1 "${HOSTFILE_PATH}")
+HOST_RANGE="${FIRST_HOST}-${LAST_HOST}"
+
+# Count number of HCAs (comma-separated)
+if [ -n "${HCA_LIST}" ]; then
+    HCA_COUNT=$(echo "${HCA_LIST}" | tr ',' '\n' | wc -l | tr -d ' ')
+    FIRST_HCA=$(echo "${HCA_LIST}" | cut -d',' -f1 | cut -d':' -f1)
+else
+    HCA_COUNT=0
+    FIRST_HCA=""
+fi
+
+# Build output directory name:
+# Single HCA: 20251124_083417_10.0.10.1-10.0.10.9_mlx5_0
+# Multiple HCAs: 20251124_083417_10.0.10.1-10.0.10.9
+if [ "${HCA_COUNT}" -eq 1 ]; then
+    OUTPUT_DIR="${OUTPUT_DIR_ORIG}_${HOST_RANGE}_${FIRST_HCA}"
+else
+    OUTPUT_DIR="${OUTPUT_DIR_ORIG}_${HOST_RANGE}"
+fi
+
 log "[3/4] Downloading results..."
 log "Output directory: ${OUTPUT_DIR}"
-download_results "${GPU_HOST}" "${OUTPUT_DIR}" "${RESULTS_DIR}"
+download_results "${GPU_HOST}" "${OUTPUT_DIR_ORIG}" "${RESULTS_DIR}"
+
+# Rename to descriptive name
+case ${RUN_ENV} in
+    mac)
+        ssh ${CPU_SERVER_USER}@${CPU_SERVER} "cd ${RESULTS_DIR} && mv ${OUTPUT_DIR_ORIG} ${OUTPUT_DIR}" 2>/dev/null || true
+        ;;
+    cpu_server|gpu_server)
+        mv "${RESULTS_DIR}/${OUTPUT_DIR_ORIG}" "${RESULTS_DIR}/${OUTPUT_DIR}" 2>/dev/null || true
+        ;;
+esac
 
 log ""
 log "[4/4] Done"
