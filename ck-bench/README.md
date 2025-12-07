@@ -310,12 +310,19 @@ Parses `nvidia-smi topo -m` output to find NICs with PCIe direct connection (PIX
 
 **Example:**
 ```
-Color Legend:  >= 0.98   >= 0.96   >= 0.94   >= 0.92   < 0.92
+Color Legend:  >= 0.98    >= 0.96    >= 0.94    >= 0.92    < 0.92
 
-    Rank:                0     1     2     3     4     5     6     7
-       0 (GPU-1):       0.00  0.98  0.97  0.98  0.97  0.98  0.97  0.98
-       1 (GPU-2):       0.98  0.00  0.98  0.97  0.98  0.97  0.98  0.97
-       2 (GPU-3):       0.97  0.98  0.00  0.98  0.97  0.98  0.97  0.98
+    Rank:                0     1     2     3     4     5
+       0 (GPU-10)      0.00  1.00  1.00  1.00  1.00  1.00
+       1 (GPU-11)      1.00  0.00  1.00  1.00  1.00  1.00
+       2 (GPU-12)      1.00  1.00  0.00  1.00  1.00  1.00
+       3 (GPU-13)      1.00  1.00  1.00  0.00  1.00  1.00
+       4 (GPU-14)      1.00  1.00  1.00  1.00  0.00  1.00
+       5 (GPU-15)      1.00  1.00  1.00  1.00  1.00  0.00
+
+Minimum bandwidth: 98247.0 MB/s between GPU-19 and GPU-25
+Maximum bandwidth: 98522.9 MB/s between GPU-20 and GPU-24 (Reference: 1.00)
+Average bandwidth: 98394.8 MB/s
 ```
 
 ### Latency Matrix
@@ -329,11 +336,19 @@ Color Legend:  >= 0.98   >= 0.96   >= 0.94   >= 0.92   < 0.92
 
 **Example:**
 ```
-Color Legend:  <= 2.0us   <= 2.5us   <= 3.0us   <= 4.5us   > 4.5us
+Color Legend:  <= 2.0us    <= 2.5us    <= 3.0us    <= 4.5us    > 4.5us
 
-    Rank:                 0      1      2      3      4      5      6      7
-       0 (GPU-1):       0.00   1.79   1.80   1.79   1.80   1.79   1.80   1.79
-       1 (GPU-2):       1.79   0.00   1.80   1.79   1.80   1.79   1.80   1.79
+    Rank:                0      1      2      3      4      5
+       0 (GPU-10)       0.00   1.83   1.83   1.90   1.80   2.74
+       1 (GPU-11)       1.83   0.00   1.85   1.82   1.81   2.69
+       2 (GPU-12)       1.83   1.85   0.00   1.84   1.81   2.74
+       3 (GPU-13)       1.90   1.82   1.84   0.00   1.81   2.76
+       4 (GPU-14)       1.80   1.81   1.81   1.81   0.00   2.68
+       5 (GPU-15)       2.74   2.69   2.74   2.76   2.68   0.00
+
+Minimum latency: 1.80 usec between GPU-17 and GPU-25
+Maximum latency: 2.76 usec between GPU-24 and GPU-48
+Average latency: 2.13 usec
 ```
 
 ### Display Features
@@ -640,4 +655,5 @@ Email: [Vincentwu@zhengytech.com](mailto:Vincentwu@zhengytech.com)
 ---
 
 **Star ⭐ this repository if you find it useful!**
+
 
