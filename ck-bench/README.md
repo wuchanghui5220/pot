@@ -66,8 +66,8 @@
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/ck-bench.git
-   cd ck-bench
+   git clone https://github.com/wuchanghui5220/pot.git
+   cd pot/ck-bench
    ```
 
 2. Create a hostfile with your GPU server hostnames/IPs:
@@ -655,5 +655,6 @@ Email: [Vincentwu@zhengytech.com](mailto:Vincentwu@zhengytech.com)
 ---
 
 **Star ⭐ this repository if you find it useful!**
+
 
 
