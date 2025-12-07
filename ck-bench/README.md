@@ -633,10 +633,11 @@ Email: [Vincentwu@zhengytech.com](mailto:Vincentwu@zhengytech.com)
 
 ## See Also
 
-- [NVIDIA HPC-X Documentation](https://docs.nvidia.com/networking/display/hpcxv221)
+- [NVIDIA HPC-X Documentation](https://developer.nvidia.com/networking/hpc-x)
 - [NVIDIA GPUDirect RDMA](https://docs.nvidia.com/cuda/gpudirect-rdma/)
 - [InfiniBand Architecture](https://www.infinibandta.org/)
 
 ---
 
 **Star ⭐ this repository if you find it useful!**
+
