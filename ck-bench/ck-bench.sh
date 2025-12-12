@@ -56,6 +56,7 @@ OUTPUT_CSV=0
 QUIET_MODE=0
 TOPO_CA_DEV="mlx5_0"  # Default HCA device for sminfo/ibtracert in topology check
 CHECK_HEALTH_ONLY=0    # Health check only mode: 1=skip benchmark, 0=run benchmark
+HEALTH_CHECK_EACH_ROUND=0  # Health check before each round: 1=enabled, 0=disabled
 LOOP_COUNT=1           # Loop test count (default: 1, no loop)
 LOOP_TEST_MODE=0       # Test mode: 1=skip reboot verification, 0=verify reboot
 VIEW_RESULTS=""        # View historical results (directory or file path)
@@ -69,6 +70,7 @@ REBOOT_INTERVAL=1      # Interval between rebooting each node (seconds, default:
 REBOOT_METHOD="reboot" # Reboot method: "reboot" (soft) or "ipmi" (power cycle)
 AUTO_REMOVE_BAD_NODES=0  # Auto remove bad nodes during loop testing (0=disabled, 1=enabled)
 MIN_NODES=2             # Minimum nodes required to continue testing (default: 2)
+AUTO_EXCLUDE_ODD_NODE=0 # Auto exclude last node if total count is odd (0=disabled, 1=enabled)
 RESET_OPTICS=0          # Reset optical modules instead of rebooting (0=disabled, 1=enabled)
 OPTICS_RESET_INTERVAL=2 # Wait time between resetting each HCA's optics (seconds, default: 2)
 AUTO_NUMA=0             # Auto NUMA binding based on HCA's NUMA node (0=disabled, 1=enabled)
@@ -179,6 +181,7 @@ Options (compatible with clusterkit.sh):
 Additional options:
   --check-topology            Show GPU-NIC-Switch topology mapping and exit
   --check-health-only         Only run health checks (SSH+IB+GPU+PCIe), skip benchmark
+  --health-check-each-round   Run health check before each loop round (use with --loop/--loop-test)
   --Ca <device>               Specify HCA device for topology query (default: mlx5_0)
   --output-csv                Output results in CSV format (rail-by-rail mode)
   -q, --quiet                 Quiet mode, only show final summary
@@ -192,6 +195,7 @@ Additional options:
   --optics-interval <sec>     Wait time between resetting each HCA's optics (default: 2 seconds)
   --auto-remove-bad-nodes     Auto remove bad nodes during loop testing (log to bad_nodes.log)
   --min-nodes <count>         Minimum nodes required to continue testing (default: 2)
+  --auto-exclude-odd-node     Auto exclude last node if total count is odd (ClusterKit requires even nodes)
   --auto-numa                 Auto NUMA binding based on HCA's NUMA node (recommended for rail-by-rail)
   --numa-policy <policy>      NUMA policy: auto (detect from HCA), none, node0, node1 (default: auto)
   --view <path>               View historical results with colorized matrix
@@ -248,6 +252,15 @@ Examples:
   # Loop testing with auto-remove bad nodes
   $0 --auto-hca -G -cx7 -z 30 --loop 10 --auto-reboot --auto-remove-bad-nodes  # Auto remove bad nodes
   $0 --auto-hca -G -cx7 -z 30 --loop 10 --auto-reboot --auto-remove-bad-nodes --min-nodes 4  # Min 4 nodes
+
+  # Health check before each round (ensures nodes are healthy before testing)
+  $0 --auto-hca -G -cx7 -z 3 --loop-test 5 --health-check-each-round  # Check before each round
+  $0 --auto-hca -G -cx7 -z 30 --loop 5 --auto-reboot --health-check-each-round  # With auto-reboot
+  $0 --auto-hca -G -cx7 -z 30 --loop 10 --auto-reboot --health-check-each-round --auto-remove-bad-nodes  # Auto-remove if failed
+
+  # Handle odd number of nodes (ClusterKit requires even nodes)
+  $0 --auto-hca -G -cx7 --auto-exclude-odd-node  # Auto-exclude last node if odd count
+  $0 --auto-hca -G -cx7 -z 30 --loop 5 --auto-exclude-odd-node  # Works with loop testing
 
   # Combined features
   $0 --auto-hca -G -cx7 -z 30 --loop-test 10 --reset-optics --auto-remove-bad-nodes  # Reset optics + auto remove
@@ -2106,15 +2119,19 @@ display_colorized_matrix() {
             # Fix concatenated numbers in the line first
             local fixed_line=$(echo "$line" | sed -E 's/([0-9])([0-9]{6,})/\1 \2/g')
 
-            # Extract rank and host - format: "0 (GPU-17):"
+            # Extract rank and host - format: "0 (GPU-17):" or "1 (GPU-8 ):"
             local rank=$(echo "$fixed_line" | awk '{print $1}')
-            local host=$(echo "$fixed_line" | awk '{print $2}' | tr -d ':')
+            # Extract hostname from parentheses, remove extra spaces and colons
+            local hostname=$(echo "$fixed_line" | grep -oE '\([^)]+\)' | head -1 | tr -d '():' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            local host="($hostname)"
 
             # Build the row with rank and host
             local row_buffer=$(printf "%8s %-12s" "$rank" "$host")
 
-            # Process each numeric value (starting from field 3)
-            local values=$(echo "$fixed_line" | awk '{for(i=3;i<=NF;i++) print $i}')
+            # Remove rank and hostname part, then extract all numeric values
+            # Format: "   0 (GPU-11):      0.0 333078.1 ..." -> "0.0 333078.1 ..."
+            local data_part=$(echo "$fixed_line" | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+\([^)]+\)[[:space:]]*://')
+            local values=$(echo "$data_part" | grep -oE '[0-9]+\.?[0-9]*')
             while IFS= read -r val; do
                 if [ -z "$val" ]; then
                     continue
@@ -2591,6 +2608,10 @@ while [[ $# -gt 0 ]]; do
             CHECK_HEALTH_ONLY=1
             shift
             ;;
+        --health-check-each-round)
+            HEALTH_CHECK_EACH_ROUND=1
+            shift
+            ;;
         --Ca)
             TOPO_CA_DEV="$2"
             shift 2
@@ -2647,6 +2668,10 @@ while [[ $# -gt 0 ]]; do
         --min-nodes)
             MIN_NODES="$2"
             shift 2
+            ;;
+        --auto-exclude-odd-node)
+            AUTO_EXCLUDE_ODD_NODE=1
+            shift
             ;;
         --reset-optics)
             RESET_OPTICS=1
@@ -3049,6 +3074,71 @@ if [ ${RAIL_BY_RAIL} -eq 1 ]; then
         done
     fi
 fi
+
+# Check if node count is even (ClusterKit requirement for pairwise tests)
+# Args: $1 = hostfile path, $2 = auto_exclude (optional, 1 to auto-exclude last node if odd)
+check_even_node_count() {
+    local hostfile=$1
+    local auto_exclude=${2:-0}
+
+    # Count active nodes (exclude comments and empty lines)
+    local node_count=$(grep -v '^#' "${hostfile}" | grep -v '^[[:space:]]*$' | wc -l | tr -d ' ')
+
+    # Check if odd
+    if [ $((node_count % 2)) -ne 0 ]; then
+        log_always ""
+        log_always "=========================================="
+        log_always "⚠️  WARNING: Odd Number of Nodes Detected"
+        log_always "=========================================="
+        log_always "Current node count: ${node_count}"
+        log_always ""
+        log_always "ClusterKit requires an EVEN number of nodes for pairwise tests."
+        log_always "ERROR: pairwise tests must be run with an even number of nodes."
+        log_always ""
+
+        if [ ${auto_exclude} -eq 1 ]; then
+            # Auto-exclude last node
+            local last_node=$(grep -v '^#' "${hostfile}" | grep -v '^[[:space:]]*$' | tail -1)
+            log_always "Auto-excluding last node to make even count: ${last_node}"
+            log_always ""
+
+            # Create temporary hostfile with last node commented out
+            local temp_hostfile="${hostfile}.even"
+            awk -v last="${last_node}" '
+                /^[[:space:]]*#/ { print; next }
+                /^[[:space:]]*$/ { print; next }
+                $0 == last { print "# AUTO-EXCLUDED (odd node): " $0; next }
+                { print }
+            ' "${hostfile}" > "${temp_hostfile}"
+
+            # Replace original hostfile
+            mv "${temp_hostfile}" "${hostfile}"
+
+            local new_count=$(grep -v '^#' "${hostfile}" | grep -v '^[[:space:]]*$' | wc -l | tr -d ' ')
+            log_always "✓ Updated node count: ${new_count}"
+            log_always "  Excluded node: ${last_node}"
+            log_always ""
+
+            return 0
+        else
+            log_always "Solutions:"
+            log_always "  1. Add one more node to hostfile"
+            log_always "  2. Comment out one node in hostfile (add # at the beginning)"
+            log_always "  3. Use --auto-exclude-odd-node to automatically exclude last node"
+            log_always ""
+            log_always "Example hostfile with odd node excluded:"
+            log_always "  GPU-1"
+            log_always "  GPU-2"
+            log_always "  GPU-3"
+            log_always "  # GPU-4  ← commented out to make even count"
+            log_always ""
+            log_always "=========================================="
+            return 1
+        fi
+    fi
+
+    return 0
+}
 
 # Run rail-by-rail benchmark round (called from main loop)
 run_railbyrail_round() {
@@ -3605,6 +3695,19 @@ fi
 # Track current hostfile (may be updated if bad nodes are removed)
 CURRENT_HOSTFILE="${HOSTFILE_PATH}"
 
+# Check if node count is even (ClusterKit requirement)
+log_always "Checking node count..."
+if ! check_even_node_count "${CURRENT_HOSTFILE}" ${AUTO_EXCLUDE_ODD_NODE}; then
+    exit 1
+fi
+
+# Upload potentially modified hostfile (if odd node was excluded)
+if [ ${AUTO_EXCLUDE_ODD_NODE} -eq 1 ]; then
+    upload_hostfile "${CURRENT_HOSTFILE}" "${GPU_HOST}"
+fi
+
+log_always ""
+
 # Main loop
 for ((round=1; round<=LOOP_COUNT; round++)); do
     # Display current node count
@@ -3618,6 +3721,74 @@ for ((round=1; round<=LOOP_COUNT; round++)); do
     fi
     log_always "=========================================="
     log_always ""
+
+    # Health check before each round if enabled
+    if [ ${HEALTH_CHECK_EACH_ROUND} -eq 1 ]; then
+        log_always "=========================================="
+        log_always "Pre-Round Health Check (Round ${round}/${LOOP_COUNT})"
+        log_always "=========================================="
+        log_always ""
+
+        # Run health check (skip_csv=1 to avoid writing CSV, just check)
+        if ! wait_for_nodes_ready "${CURRENT_HOSTFILE}" 0 1 1; then
+            log_always ""
+            log_always "❌ Health check failed before round ${round}!"
+            log_always ""
+
+            # If auto-remove is enabled, try to remove bad nodes
+            if [ ${AUTO_REMOVE_BAD_NODES} -eq 1 ]; then
+                log_always "Attempting to identify and remove bad nodes..."
+                log_always ""
+
+                # Re-run health check to identify bad nodes
+                health_check_result=0
+                wait_for_nodes_ready "${CURRENT_HOSTFILE}" 0 1 1 || health_check_result=$?
+
+                # Check if we have bad nodes identified
+                if [ -f "${BAD_NODES_LOG}" ]; then
+                    bad_nodes_count=$(grep -c "FAILED" "${BAD_NODES_LOG}" 2>/dev/null || echo "0")
+                    if [ ${bad_nodes_count} -gt 0 ]; then
+                        remove_bad_nodes_from_hostfile "${BAD_NODES_LOG}" "${CURRENT_HOSTFILE}"
+
+                        # Upload updated hostfile
+                        upload_hostfile "${CURRENT_HOSTFILE}" "${GPU_HOST}"
+
+                        # Recheck with updated hostfile
+                        log_always ""
+                        log_always "Rechecking health with updated hostfile..."
+                        log_always ""
+
+                        if ! wait_for_nodes_ready "${CURRENT_HOSTFILE}" 0 1 1; then
+                            log_always "❌ Health check still failed after removing bad nodes!"
+                            exit 1
+                        fi
+                    else
+                        log_always "❌ No bad nodes identified, aborting!"
+                        exit 1
+                    fi
+                else
+                    log_always "❌ Health check failed but no bad nodes log found!"
+                    exit 1
+                fi
+            else
+                # Auto-remove disabled, abort
+                log_always "Aborting test due to health check failure."
+                log_always "Use --auto-remove-bad-nodes to automatically remove failing nodes."
+                exit 1
+            fi
+        fi
+
+        # Run PCIe check
+        if ! check_all_nodes_pcie "${CURRENT_HOSTFILE}" 1; then
+            log_always ""
+            log_always "❌ PCIe check failed before round ${round}!"
+            exit 1
+        fi
+
+        log_always ""
+        log_always "✓ Health check passed! Starting benchmark..."
+        log_always ""
+    fi
 
     # Run benchmark for this round
     if [ ${RAIL_BY_RAIL} -eq 1 ]; then
