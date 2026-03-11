@@ -7,7 +7,7 @@
 SERVER_FILE=""
 CLIENT_FILE=""
 HOSTFILE=""              # 单文件主机列表（自动配对模式）
-HCA_LIST="mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_6,mlx5_7,mlx5_8,mlx5_9"
+HCA_LIST="mlx5_20,mlx5_21,mlx5_22,mlx5_23,mlx5_24,mlx5_25,mlx5_26,mlx5_27"
 USER="root"
 DURATION=""
 ITERATIONS=""
@@ -863,33 +863,40 @@ else
     TEST_CMD="ib_write_bw"
 fi
 
-# 构建测试参数
-TEST_PARAMS="-i ${IB_PORT} -s ${SIZE} -F"
-
-# 通用参数
-if [ -n "$ITERATIONS" ]; then
-    TEST_PARAMS="$TEST_PARAMS -n ${ITERATIONS}"
-else
-    TEST_PARAMS="$TEST_PARAMS -D ${DURATION}"
-fi
-[ "$PERFORM_WARMUP" = true ] && TEST_PARAMS="$TEST_PARAMS --perform_warm_up"
+# 构建测试参数（服务端和客户端分开）
+# 服务端：基础参数，不需要 -D 和 --run_infinitely
+# 客户端：使用 --run_infinitely 循环测试，由脚本到时间后主动 kill
+BASE_PARAMS="-i ${IB_PORT} -s ${SIZE} -F"
+[ "$PERFORM_WARMUP" = true ] && BASE_PARAMS="$BASE_PARAMS --perform_warm_up"
 
 # 延时测试专用参数
 if [ "$TEST_MODE" = "latency" ]; then
-    [ "$REPORT_HISTOGRAM" = true ] && TEST_PARAMS="$TEST_PARAMS -H"
-    [ "$REPORT_UNSORTED" = true ] && TEST_PARAMS="$TEST_PARAMS -U"
+    [ "$REPORT_HISTOGRAM" = true ] && BASE_PARAMS="$BASE_PARAMS -H"
+    [ "$REPORT_UNSORTED" = true ] && BASE_PARAMS="$BASE_PARAMS -U"
 fi
 
 # 带宽测试专用参数
 if [ "$TEST_MODE" = "bandwidth" ]; then
-    [ "$BIDIRECTIONAL" = true ] && TEST_PARAMS="$TEST_PARAMS -b"
-    [ "$ALL_SIZES" = true ] && TEST_PARAMS="$TEST_PARAMS -a"
-    [ "$REPORT_GBITS" = true ] && TEST_PARAMS="$TEST_PARAMS --report_gbits"
-    [ "$NO_PEAK" = true ] && TEST_PARAMS="$TEST_PARAMS -N"
-    [ "$RUN_INFINITELY" = true ] && TEST_PARAMS="$TEST_PARAMS --run_infinitely"
-    [ "$REVERSED" = true ] && TEST_PARAMS="$TEST_PARAMS --reversed"
-    [ -n "$MTU" ] && TEST_PARAMS="$TEST_PARAMS -m ${MTU}"
-    TEST_PARAMS="$TEST_PARAMS -t ${TX_DEPTH} -q ${QP_NUM}"
+    [ "$BIDIRECTIONAL" = true ] && BASE_PARAMS="$BASE_PARAMS -b"
+    [ "$ALL_SIZES" = true ] && BASE_PARAMS="$BASE_PARAMS -a"
+    [ "$REPORT_GBITS" = true ] && BASE_PARAMS="$BASE_PARAMS --report_gbits"
+    [ "$NO_PEAK" = true ] && BASE_PARAMS="$BASE_PARAMS -N"
+    [ "$REVERSED" = true ] && BASE_PARAMS="$BASE_PARAMS --reversed"
+    [ -n "$MTU" ] && BASE_PARAMS="$BASE_PARAMS -m ${MTU}"
+    BASE_PARAMS="$BASE_PARAMS -t ${TX_DEPTH} -q ${QP_NUM}"
+fi
+
+# 服务端参数：基础参数即可
+SERVER_TEST_PARAMS="$BASE_PARAMS"
+
+# 客户端参数：加上运行控制
+CLIENT_TEST_PARAMS="$BASE_PARAMS"
+if [ -n "$ITERATIONS" ]; then
+    CLIENT_TEST_PARAMS="$CLIENT_TEST_PARAMS -n ${ITERATIONS}"
+else
+    # 使用 --run_infinitely 循环测试，每轮迭代输出一行结果
+    # 脚本在 DURATION 到期后主动 kill 客户端进程
+    CLIENT_TEST_PARAMS="$CLIENT_TEST_PARAMS --run_infinitely"
 fi
 
 # 分批启动所有服务器端
@@ -904,16 +911,16 @@ for (( pair_idx=0; pair_idx<PAIR_COUNT; pair_idx++ )); do
         tcp_port=$((BASE_TCP_PORT + pair_idx * 100 + hca_idx))
         log_file="${REMOTE_LOG_DIR}/server_pair${pair_idx}_${server_hca}.log"
 
-        # 构建启动命令，根据是否启用 NUMA 绑定
+        # 构建启动命令，根据是否启用 NUMA 绑定（服务端使用 SERVER_TEST_PARAMS）
         if [ "$ENABLE_NUMA_BINDING" = true ]; then
             numa_node="${NUMA_MAP["${server}_${server_hca}"]}"
             if [ -n "$numa_node" ]; then
-                start_cmd="numactl --cpunodebind=${numa_node} --membind=${numa_node} ${TEST_CMD} -d ${server_hca} ${TEST_PARAMS} -p ${tcp_port}"
+                start_cmd="numactl --cpunodebind=${numa_node} --membind=${numa_node} ${TEST_CMD} -d ${server_hca} ${SERVER_TEST_PARAMS} -p ${tcp_port}"
             else
-                start_cmd="${TEST_CMD} -d ${server_hca} ${TEST_PARAMS} -p ${tcp_port}"
+                start_cmd="${TEST_CMD} -d ${server_hca} ${SERVER_TEST_PARAMS} -p ${tcp_port}"
             fi
         else
-            start_cmd="${TEST_CMD} -d ${server_hca} ${TEST_PARAMS} -p ${tcp_port}"
+            start_cmd="${TEST_CMD} -d ${server_hca} ${SERVER_TEST_PARAMS} -p ${tcp_port}"
         fi
 
         # 启动服务器端
@@ -949,16 +956,16 @@ for (( pair_idx=0; pair_idx<PAIR_COUNT; pair_idx++ )); do
         tcp_port=$((BASE_TCP_PORT + pair_idx * 100 + hca_idx))
         log_file="${REMOTE_LOG_DIR}/client_pair${pair_idx}_${client_hca}.log"
 
-        # 构建启动命令，根据是否启用 NUMA 绑定
+        # 构建启动命令，根据是否启用 NUMA 绑定（客户端使用 CLIENT_TEST_PARAMS）
         if [ "$ENABLE_NUMA_BINDING" = true ]; then
             numa_node="${NUMA_MAP["${client}_${client_hca}"]}"
             if [ -n "$numa_node" ]; then
-                start_cmd="numactl --cpunodebind=${numa_node} --membind=${numa_node} ${TEST_CMD} -d ${client_hca} ${TEST_PARAMS} -p ${tcp_port} ${server}"
+                start_cmd="numactl --cpunodebind=${numa_node} --membind=${numa_node} ${TEST_CMD} -d ${client_hca} ${CLIENT_TEST_PARAMS} -p ${tcp_port} ${server}"
             else
-                start_cmd="${TEST_CMD} -d ${client_hca} ${TEST_PARAMS} -p ${tcp_port} ${server}"
+                start_cmd="${TEST_CMD} -d ${client_hca} ${CLIENT_TEST_PARAMS} -p ${tcp_port} ${server}"
             fi
         else
-            start_cmd="${TEST_CMD} -d ${client_hca} ${TEST_PARAMS} -p ${tcp_port} ${server}"
+            start_cmd="${TEST_CMD} -d ${client_hca} ${CLIENT_TEST_PARAMS} -p ${tcp_port} ${server}"
         fi
 
         # 启动客户端
@@ -1062,9 +1069,20 @@ else
     echo ""
 fi
 
-# 额外等待确保所有进程完成
-echo -e "${YELLOW}[等待]${NC} 等待所有进程完全结束 (10秒)..."
-sleep 10
+# 停止所有远程测试进程
+if [ -z "$ITERATIONS" ]; then
+    echo -e "${BOLD}[停止]${NC} 测试时长已到，停止所有远程测试进程..."
+    for (( i=0; i<PAIR_COUNT; i++ )); do
+        ssh_cmd "${CLIENTS[$i]}" "pkill -f '${TEST_CMD}'" &
+        ssh_cmd "${SERVERS[$i]}" "pkill -f '${TEST_CMD}'" &
+    done
+    wait
+    echo -e "${GREEN}[完成]${NC} 所有测试进程已停止"
+fi
+
+# 额外等待确保所有进程完全结束、日志写入完成
+echo -e "${YELLOW}[等待]${NC} 等待日志写入完成 (5秒)..."
+sleep 5
 echo ""
 
 # 收集所有日志
@@ -1185,11 +1203,11 @@ echo -e "${BOLD}[分析]${NC} 生成测试报告..."
 
     if [ "$TEST_MODE" = "latency" ]; then
         echo "┌──────────────────────────────────────────────────────────────────────────────────────┐"
-        echo "│ 服务端IP        客户端IP        HCA配对             迭代次数      平均延时(us)   TPS   │"
+        echo "│ 服务端IP        客户端IP        HCA配对             迭代/轮次     平均延时(us)   TPS   │"
         echo "├──────────────────────────────────────────────────────────────────────────────────────┤"
     else
         echo "┌────────────────────────────────────────────────────────────────────────────────────────────┐"
-        echo "│ 服务端IP        客户端IP        HCA配对             迭代次数      平均带宽(Gb/s)  消息速率  │"
+        echo "│ 服务端IP        客户端IP        HCA配对             迭代/轮次     平均带宽(Gb/s)  消息速率  │"
         echo "├────────────────────────────────────────────────────────────────────────────────────────────┤"
     fi
 
@@ -1213,22 +1231,34 @@ echo -e "${BOLD}[分析]${NC} 生成测试报告..."
 
             if [ -f "$client_log" ] && [ -s "$client_log" ]; then
                 if [ "$TEST_MODE" = "latency" ]; then
-                    # 延时测试结果解析
-                    result_line=$(grep -A1 "#bytes.*#iterations.*t_avg" "$client_log" | tail -1)
+                    # 延时测试结果解析（--run_infinitely 模式下有多行结果）
+                    # 格式: #bytes #iterations    t_avg[usec]    tps
+                    result_lines=$(grep -A1 "#bytes.*#iterations.*t_avg" "$client_log" | grep -v "^#" | grep -v "^--$" | grep -E "^\s*[0-9]")
+                    line_count=$(echo "$result_lines" | grep -c . 2>/dev/null || echo 0)
 
-                    if [ -n "$result_line" ]; then
-                        iterations=$(echo "$result_line" | awk '{print $2}')
-                        avg_lat=$(echo "$result_line" | awk '{print $3}')
-                        tps=$(echo "$result_line" | awk '{print $4}')
+                    if [ -n "$result_lines" ] && [ "$line_count" -gt 0 ]; then
+                        # 计算所有轮次的平均值
+                        total_iterations=0
+                        total_lat=0
+                        total_tps=0
+                        while IFS= read -r result_line; do
+                            iter=$(echo "$result_line" | awk '{print $2}')
+                            lat=$(echo "$result_line" | awk '{print $3}')
+                            tp=$(echo "$result_line" | awk '{print $4}')
+                            total_iterations=$((total_iterations + iter))
+                            total_lat=$(echo "$total_lat + $lat" | bc -l)
+                            total_tps=$(echo "$total_tps + $tp" | bc -l)
+                        done <<< "$result_lines"
 
-                        # 格式化 TPS 为整数
-                        tps_int=$(printf "%.0f" "$tps")
+                        avg_lat=$(echo "scale=2; $total_lat / $line_count" | bc -l)
+                        avg_tps=$(echo "scale=0; $total_tps / $line_count" | bc -l)
+                        tps_int=$(printf "%.0f" "$avg_tps")
 
-                        printf "│ %-15s %-15s %-19s %-13s %-15s %-6s │\n" \
-                            "$server" "$client" "$hca_pair" "$iterations" "$avg_lat" "$tps_int"
+                        printf "│ %-15s %-15s %-19s %-7s/%-5s %-15s %-6s │\n" \
+                            "$server" "$client" "$hca_pair" "$total_iterations" "${line_count}轮" "$avg_lat" "$tps_int"
 
                         global_valid_count=$((global_valid_count + 1))
-                        global_total_value=$(echo "$global_total_value + $tps" | bc)
+                        global_total_value=$(echo "$global_total_value + $avg_tps" | bc)
 
                         if (( $(echo "$avg_lat < $global_min_value" | bc -l) )); then
                             global_min_value=$avg_lat
@@ -1245,21 +1275,32 @@ echo -e "${BOLD}[分析]${NC} 生成测试报告..."
                         fi
                     fi
                 else
-                    # 带宽测试结果解析
+                    # 带宽测试结果解析（--run_infinitely 模式下有多行结果）
                     # 格式: #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]
-                    result_line=$(grep -E "^\s*[0-9]+\s+[0-9]+\s+" "$client_log" | tail -1)
+                    result_lines=$(grep -E "^\s*[0-9]+\s+[0-9]+\s+" "$client_log")
+                    line_count=$(echo "$result_lines" | grep -c . 2>/dev/null || echo 0)
 
-                    if [ -n "$result_line" ]; then
-                        iterations=$(echo "$result_line" | awk '{print $2}')
-                        bw_avg=$(echo "$result_line" | awk '{print $4}')
-                        msg_rate=$(echo "$result_line" | awk '{print $5}')
+                    if [ -n "$result_lines" ] && [ "$line_count" -gt 0 ]; then
+                        # 计算所有轮次的平均值
+                        total_iterations=0
+                        total_bw=0
+                        total_msg_rate=0
+                        while IFS= read -r result_line; do
+                            iter=$(echo "$result_line" | awk '{print $2}')
+                            bw=$(echo "$result_line" | awk '{print $4}')
+                            mr=$(echo "$result_line" | awk '{print $5}')
+                            total_iterations=$((total_iterations + iter))
+                            total_bw=$(echo "$total_bw + $bw" | bc -l)
+                            total_msg_rate=$(echo "$total_msg_rate + $mr" | bc -l)
+                        done <<< "$result_lines"
 
-                        # 格式化带宽和消息速率
+                        bw_avg=$(echo "scale=2; $total_bw / $line_count" | bc -l)
+                        msg_rate_avg=$(echo "scale=3; $total_msg_rate / $line_count" | bc -l)
                         bw_formatted=$(printf "%.2f" "$bw_avg")
-                        msg_rate_formatted=$(printf "%.3f" "$msg_rate")
+                        msg_rate_formatted=$(printf "%.3f" "$msg_rate_avg")
 
-                        printf "│ %-15s %-15s %-19s %-13s %-15s %-9s │\n" \
-                            "$server" "$client" "$hca_pair" "$iterations" "$bw_formatted" "$msg_rate_formatted"
+                        printf "│ %-15s %-15s %-19s %-7s/%-5s %-15s %-9s │\n" \
+                            "$server" "$client" "$hca_pair" "$total_iterations" "${line_count}轮" "$bw_formatted" "$msg_rate_formatted"
 
                         global_valid_count=$((global_valid_count + 1))
                         global_total_value=$(echo "$global_total_value + $bw_avg" | bc)
