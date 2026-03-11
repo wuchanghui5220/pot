@@ -642,7 +642,7 @@ echo "  总测试数: $((PAIR_COUNT * HCA_COUNT))"
 if [ -n "$ITERATIONS" ]; then
     echo "  测试模式: 迭代次数 ($ITERATIONS 次)"
 else
-    echo "  测试模式: 持续时间 ($DURATION 秒 = $(echo "scale=1; $DURATION/60" | bc) 分钟)"
+    echo "  测试模式: 持续时间 ($DURATION 秒 = $(awk "BEGIN {printf \"%.1f\", $DURATION/60}") 分钟)"
 fi
 echo "  消息大小: $SIZE 字节"
 echo "  最大并发批次: $MAX_CONCURRENT_BATCH"
@@ -663,10 +663,25 @@ for (( i=0; i<HCA_COUNT; i++ )); do
 done
 echo ""
 
-# SSH 命令包装
-# SSH 命令封装
+# SSH 命令封装（本机直接执行，不走 SSH）
+LOCAL_HOSTNAME=$(hostname)
+LOCAL_IPS=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^$' || ifconfig 2>/dev/null | grep 'inet ' | awk '{print $2}' | grep -v '127.0.0.1')
+
+is_local_host() {
+    local target="$1"
+    [ "$target" = "localhost" ] && return 0
+    [ "$target" = "127.0.0.1" ] && return 0
+    [ "$target" = "$LOCAL_HOSTNAME" ] && return 0
+    echo "$LOCAL_IPS" | grep -qx "$target" && return 0
+    return 1
+}
+
 ssh_cmd() {
-    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$USER@$1" "$2" 2>/dev/null
+    if is_local_host "$1"; then
+        bash -c "$2" 2>/dev/null
+    else
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "$USER@$1" "$2" 2>/dev/null
+    fi
 }
 
 # 测试 SSH 连接（并行检查）
@@ -886,8 +901,11 @@ if [ "$TEST_MODE" = "bandwidth" ]; then
     BASE_PARAMS="$BASE_PARAMS -t ${TX_DEPTH} -q ${QP_NUM}"
 fi
 
-# 服务端参数：基础参数即可
+# 服务端参数：基础参数 + --run_infinitely 持续监听（由脚本到时间后 kill）
 SERVER_TEST_PARAMS="$BASE_PARAMS"
+if [ -z "$ITERATIONS" ]; then
+    SERVER_TEST_PARAMS="$SERVER_TEST_PARAMS --run_infinitely"
+fi
 
 # 客户端参数：加上运行控制
 CLIENT_TEST_PARAMS="$BASE_PARAMS"
@@ -993,7 +1011,7 @@ echo -e "  并发测试总数: $((PAIR_COUNT * HCA_COUNT))"
 if [ -n "$ITERATIONS" ]; then
     echo -e "  测试迭代: $ITERATIONS 次"
 else
-    echo -e "  测试时长: $DURATION 秒 ($(echo "scale=1; $DURATION/60" | bc) 分钟)"
+    echo -e "  测试时长: $DURATION 秒 ($(awk "BEGIN {printf \"%.1f\", $DURATION/60}") 分钟)"
     echo -e "  预计完成: $(date -d "+${DURATION} seconds" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || date -v+${DURATION}S "+%Y-%m-%d %H:%M:%S" 2>/dev/null)"
 fi
 echo ""
@@ -1183,7 +1201,7 @@ echo -e "${BOLD}[分析]${NC} 生成测试报告..."
     if [ -n "$ITERATIONS" ]; then
         echo "  测试模式: 迭代次数 ($ITERATIONS 次)"
     else
-        echo "  测试模式: 持续时间 ($DURATION 秒 = $(echo "scale=1; $DURATION/60" | bc) 分钟)"
+        echo "  测试模式: 持续时间 ($DURATION 秒 = $(awk "BEGIN {printf \"%.1f\", $DURATION/60}") 分钟)"
     fi
     echo "  消息大小: $SIZE 字节"
     echo "  预热测试: $([ "$PERFORM_WARMUP" = true ] && echo "启用" || echo "禁用")"
@@ -1237,33 +1255,24 @@ echo -e "${BOLD}[分析]${NC} 生成测试报告..."
                     line_count=$(echo "$result_lines" | grep -c . 2>/dev/null || echo 0)
 
                     if [ -n "$result_lines" ] && [ "$line_count" -gt 0 ]; then
-                        # 计算所有轮次的平均值
-                        total_iterations=0
-                        total_lat=0
-                        total_tps=0
-                        while IFS= read -r result_line; do
-                            iter=$(echo "$result_line" | awk '{print $2}')
-                            lat=$(echo "$result_line" | awk '{print $3}')
-                            tp=$(echo "$result_line" | awk '{print $4}')
-                            total_iterations=$((total_iterations + iter))
-                            total_lat=$(echo "$total_lat + $lat" | bc -l)
-                            total_tps=$(echo "$total_tps + $tp" | bc -l)
-                        done <<< "$result_lines"
-
-                        avg_lat=$(echo "scale=2; $total_lat / $line_count" | bc -l)
-                        avg_tps=$(echo "scale=0; $total_tps / $line_count" | bc -l)
+                        # 用 awk 一次性计算所有轮次的平均值（避免依赖 bc）
+                        read total_iterations avg_lat avg_tps <<< $(echo "$result_lines" | awk '{
+                            sum_iter += $2; sum_lat += $3; sum_tps += $4; n++
+                        } END {
+                            printf "%d %.2f %.0f", sum_iter, sum_lat/n, sum_tps/n
+                        }')
                         tps_int=$(printf "%.0f" "$avg_tps")
 
                         printf "│ %-15s %-15s %-19s %-7s/%-5s %-15s %-6s │\n" \
                             "$server" "$client" "$hca_pair" "$total_iterations" "${line_count}轮" "$avg_lat" "$tps_int"
 
                         global_valid_count=$((global_valid_count + 1))
-                        global_total_value=$(echo "$global_total_value + $avg_tps" | bc)
+                        global_total_value=$(awk "BEGIN {printf \"%.2f\", $global_total_value + $avg_tps}")
 
-                        if (( $(echo "$avg_lat < $global_min_value" | bc -l) )); then
+                        if awk "BEGIN {exit !($avg_lat < $global_min_value)}"; then
                             global_min_value=$avg_lat
                         fi
-                        if (( $(echo "$avg_lat > $global_max_value" | bc -l) )); then
+                        if awk "BEGIN {exit !($avg_lat > $global_max_value)}"; then
                             global_max_value=$avg_lat
                         fi
                     else
@@ -1281,21 +1290,12 @@ echo -e "${BOLD}[分析]${NC} 生成测试报告..."
                     line_count=$(echo "$result_lines" | grep -c . 2>/dev/null || echo 0)
 
                     if [ -n "$result_lines" ] && [ "$line_count" -gt 0 ]; then
-                        # 计算所有轮次的平均值
-                        total_iterations=0
-                        total_bw=0
-                        total_msg_rate=0
-                        while IFS= read -r result_line; do
-                            iter=$(echo "$result_line" | awk '{print $2}')
-                            bw=$(echo "$result_line" | awk '{print $4}')
-                            mr=$(echo "$result_line" | awk '{print $5}')
-                            total_iterations=$((total_iterations + iter))
-                            total_bw=$(echo "$total_bw + $bw" | bc -l)
-                            total_msg_rate=$(echo "$total_msg_rate + $mr" | bc -l)
-                        done <<< "$result_lines"
-
-                        bw_avg=$(echo "scale=2; $total_bw / $line_count" | bc -l)
-                        msg_rate_avg=$(echo "scale=3; $total_msg_rate / $line_count" | bc -l)
+                        # 用 awk 一次性计算所有轮次的平均值（避免依赖 bc）
+                        read total_iterations bw_avg msg_rate_avg <<< $(echo "$result_lines" | awk '{
+                            sum_iter += $2; sum_bw += $4; sum_mr += $5; n++
+                        } END {
+                            printf "%d %.2f %.3f", sum_iter, sum_bw/n, sum_mr/n
+                        }')
                         bw_formatted=$(printf "%.2f" "$bw_avg")
                         msg_rate_formatted=$(printf "%.3f" "$msg_rate_avg")
 
@@ -1303,12 +1303,12 @@ echo -e "${BOLD}[分析]${NC} 生成测试报告..."
                             "$server" "$client" "$hca_pair" "$total_iterations" "${line_count}轮" "$bw_formatted" "$msg_rate_formatted"
 
                         global_valid_count=$((global_valid_count + 1))
-                        global_total_value=$(echo "$global_total_value + $bw_avg" | bc)
+                        global_total_value=$(awk "BEGIN {printf \"%.2f\", $global_total_value + $bw_avg}")
 
-                        if (( $(echo "$bw_avg < $global_min_value" | bc -l) )); then
+                        if awk "BEGIN {exit !($bw_avg < $global_min_value)}"; then
                             global_min_value=$bw_avg
                         fi
-                        if (( $(echo "$bw_avg > $global_max_value" | bc -l) )); then
+                        if awk "BEGIN {exit !($bw_avg > $global_max_value)}"; then
                             global_max_value=$bw_avg
                         fi
                     else
@@ -1356,12 +1356,12 @@ echo -e "${BOLD}[分析]${NC} 生成测试报告..."
             echo "  最低延时: ${global_min_value} us"
             echo "  最高延时: ${global_max_value} us"
             echo "  总 TPS: $(printf "%.0f" $global_total_value)"
-            echo "  平均 TPS: $(echo "scale=0; $global_total_value / $global_valid_count" | bc)"
+            echo "  平均 TPS: $(awk "BEGIN {printf \"%.0f\", $global_total_value / $global_valid_count}")"
         else
             echo "  最低带宽: ${global_min_value} Gb/s"
             echo "  最高带宽: ${global_max_value} Gb/s"
             echo "  总带宽: $(printf "%.2f" $global_total_value) Gb/s"
-            echo "  平均带宽: $(echo "scale=2; $global_total_value / $global_valid_count" | bc) Gb/s"
+            echo "  平均带宽: $(awk "BEGIN {printf \"%.2f\", $global_total_value / $global_valid_count}") Gb/s"
         fi
     else
         echo "  ⚠ 警告: 所有测试失败"
