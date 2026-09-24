@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # =======================================================================
-# 脚本名称: ssh_deploy_v6.sh
+# 脚本名称: ssh_deploy_v8.sh
 # 功能:
 #   local : CPU 管理节点 -> 所有 GPU 节点免密
 #   full  : CPU -> GPU 免密 + GPU 集群统一密钥 + GPU 节点间互信
@@ -19,6 +19,11 @@ CONNECT_TIMEOUT=5
 # 0: 默认，不修改主机名
 # 1: 使用 -N 参数后启用，例如: 192.168.200.10 server01
 SET_HOSTNAME=0
+
+# 是否把 hostfile 中的 IP + hostname 映射同步到所有远端节点 /etc/hosts
+# 0: 默认不修改 /etc/hosts
+# 1: 使用 -H 参数后启用
+SYNC_HOSTS=0
 
 # full 模式验证方式:
 #   ring : GPU1->GPU2->...->GPUn->GPU1，推荐，大集群速度快
@@ -47,8 +52,9 @@ usage() {
     echo "  -f <file>     主机文件，默认 hostfile.txt"
     echo "  -m <mode>     local | full，默认 local"
     echo "  -b <num>      并发数，默认 15"
-    echo "  -V <mode>     Full 验证方式 ring | all，默认 ring"
+    echo "  -V [mode]     启用 Full 验证；不带值默认 ring，可指定 ring | all"
     echo "  -N            使用 hostfile 第二列设置远端主机名（默认不修改）"
+    echo "  -H            将 hostfile 的 IP/hostname 映射同步到所有节点 /etc/hosts"
     echo "  -h            显示帮助"
     echo
     echo "hostfile 示例:"
@@ -56,19 +62,64 @@ usage() {
     echo "  192.168.200.11 server02"
 }
 
-while getopts ":u:p:P:f:m:b:V:Nh" opt; do
-    case "$opt" in
-        u) USER_NAME="$OPTARG" ;;
-        p) PASSWORD="$OPTARG" ;;
-        P) PORT="$OPTARG" ;;
-        f) HOST_FILE="$OPTARG" ;;
-        m) MODE="$OPTARG" ;;
-        b) BATCH_SIZE="$OPTARG" ;;
-        V) FULL_VERIFY="$OPTARG" ;;
-        N) SET_HOSTNAME=1 ;;
-        h) usage; exit 0 ;;
-        :) echo -e "${RED}[Error] -$OPTARG 缺少参数${NC}"; usage; exit 1 ;;
-        \?) echo -e "${RED}[Error] 未知参数: -$OPTARG${NC}"; usage; exit 1 ;;
+# 参数解析：手工解析是为了让 -V 同时支持：
+#   -V            -> 默认 ring
+#   -V ring       -> ring
+#   -V all        -> all
+# 并避免 getopts 将后面的 -H / -N 错当作 -V 的参数。
+while (( $# > 0 )); do
+    case "$1" in
+        -u|-p|-P|-f|-m|-b)
+            opt="$1"
+            if (( $# < 2 )) || [[ "$2" == -* ]]; then
+                echo -e "${RED}[Error] $opt 缺少参数${NC}"
+                usage
+                exit 1
+            fi
+            case "$opt" in
+                -u) USER_NAME="$2" ;;
+                -p) PASSWORD="$2" ;;
+                -P) PORT="$2" ;;
+                -f) HOST_FILE="$2" ;;
+                -m) MODE="$2" ;;
+                -b) BATCH_SIZE="$2" ;;
+            esac
+            shift 2
+            ;;
+        -V)
+            # -V 后面没有值，或者紧跟下一个选项：默认使用 ring。
+            if (( $# == 1 )) || [[ "$2" == -* ]]; then
+                FULL_VERIFY="ring"
+                shift
+            elif [[ "$2" == "ring" || "$2" == "all" ]]; then
+                FULL_VERIFY="$2"
+                shift 2
+            else
+                echo -e "${RED}[Error] -V 只能是 ring 或 all；也可以只写 -V（默认 ring）${NC}"
+                exit 1
+            fi
+            ;;
+        -N)
+            SET_HOSTNAME=1
+            shift
+            ;;
+        -H)
+            SYNC_HOSTS=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo -e "${RED}[Error] 未知参数: $1${NC}"
+            usage
+            exit 1
+            ;;
     esac
 done
 
@@ -111,7 +162,7 @@ load_hosts() {
 
         # IP 重复时仅保留第一次；启用 -N 时若同一 IP 对应不同 hostname 则报错
         if [[ -n "${seen_ip[$ip]+x}" ]]; then
-            if (( SET_HOSTNAME == 1 )) && [[ -n "$host" && "${DESIRED_HOSTNAME_BY_IP[$ip]:-}" != "$host" ]]; then
+            if (( SET_HOSTNAME == 1 || SYNC_HOSTS == 1 )) && [[ -n "$host" && "${DESIRED_HOSTNAME_BY_IP[$ip]:-}" != "$host" ]]; then
                 echo -e "${RED}[Error] $HOST_FILE 中 IP $ip 重复且 hostname 不一致${NC}"
                 exit 1
             fi
@@ -131,7 +182,7 @@ load_hosts() {
         exit 1
     fi
 
-    if (( SET_HOSTNAME == 1 )); then
+    if (( SET_HOSTNAME == 1 || SYNC_HOSTS == 1 )); then
         local name label
         local -a labels
 
@@ -139,7 +190,7 @@ load_hosts() {
             name="${DESIRED_HOSTNAME_BY_IP[$ip]:-}"
 
             if [[ -z "$name" ]]; then
-                echo -e "${RED}[Error] 已启用 -N，但 $ip 缺少第二列 hostname${NC}"
+                echo -e "${RED}[Error] 已启用 -N 或 -H，但 $ip 缺少第二列 hostname${NC}"
                 exit 1
             fi
 
@@ -169,7 +220,16 @@ load_hosts() {
     if (( SET_HOSTNAME == 1 )); then
         echo -e "${YELLOW}[System] 已启用主机名配置：将使用 hostfile 第二列修改远端 hostname${NC}"
     else
-        echo -e "${BLUE}[System] 主机名配置未启用：hostfile 第二列不会用于服务器重命名${NC}"
+        echo -e "${BLUE}[System] 主机名配置未启用：不会修改远端 hostname${NC}"
+    fi
+
+    if (( SYNC_HOSTS == 1 )); then
+        echo -e "${YELLOW}[System] 已启用 /etc/hosts 同步：所有节点将获得完整 IP/hostname 映射${NC}"
+    else
+        echo -e "${BLUE}[System] /etc/hosts 同步未启用${NC}"
+        if (( SET_HOSTNAME == 1 )); then
+            echo -e "${YELLOW}[Warn] 已使用 -N 修改 hostname，但未使用 -H；除非已有 DNS，否则 ssh node02 这类名称可能无法解析${NC}"
+        fi
     fi
 }
 
@@ -378,6 +438,123 @@ fi
     return 0
 }
 
+build_cluster_hosts_map() {
+    local map_file="$1"
+    : > "$map_file"
+
+    local ip name
+    for ip in "${HOSTS[@]}"; do
+        name="${DESIRED_HOSTNAME_BY_IP[$ip]:-}"
+        if [[ -z "$name" ]]; then
+            echo -e "${RED}[Error] $ip 缺少第二列 hostname，无法生成 /etc/hosts 映射${NC}"
+            return 1
+        fi
+        printf '%s\t%s\n' "$ip" "$name" >> "$map_file"
+    done
+}
+
+sync_hosts_on_node() {
+    local ip="$1"
+    local map_file="$2"
+    local remote_tmp remote_cmd quoted_tmp
+
+    # 先以普通 SSH 用户身份在其 HOME 下创建临时文件，随后由 sudo/root 更新 /etc/hosts。
+    remote_tmp=$(cpu_ssh "$ip" 'mktemp "$HOME/.ssh_deploy_hosts.XXXXXX"' 2>/dev/null | head -n1 | tr -d '\r')
+    if [[ -z "$remote_tmp" ]]; then
+        echo -e "${RED}[Hosts FAIL] $ip 无法创建远端临时文件${NC}"
+        return 1
+    fi
+
+    if ! cpu_scp "$map_file" "$ip" "$remote_tmp" >/dev/null 2>&1; then
+        cpu_ssh "$ip" "rm -f $(printf '%q' "$remote_tmp")" >/dev/null 2>&1 || true
+        echo -e "${RED}[Hosts FAIL] $ip 分发主机映射失败${NC}"
+        return 1
+    fi
+
+    printf -v quoted_tmp '%q' "$remote_tmp"
+    remote_cmd="
+set -e
+map_file=$quoted_tmp
+hosts_file=/etc/hosts
+start_marker='# BEGIN SSH_DEPLOY_CLUSTER_HOSTS'
+end_marker='# END SSH_DEPLOY_CLUSTER_HOSTS'
+tmp=\$(mktemp)
+
+# 保留 /etc/hosts 原有内容，仅替换本脚本管理的区块，保证脚本可重复执行。
+awk -v start=\"\$start_marker\" -v end=\"\$end_marker\" '
+    \$0 == start { skip=1; next }
+    \$0 == end   { skip=0; next }
+    !skip { print }
+' \"\$hosts_file\" > \"\$tmp\"
+
+# 去掉尾部多余空行后追加受管区块。
+sed -i ':a;/^[[:space:]]*\$/ { \$d; N; ba; }' \"\$tmp\" 2>/dev/null || true
+printf '\\n%s\\n' \"\$start_marker\" >> \"\$tmp\"
+cat \"\$map_file\" >> \"\$tmp\"
+printf '%s\\n' \"\$end_marker\" >> \"\$tmp\"
+
+# 第一次修改时保存一份原始备份。
+if [[ ! -f /etc/hosts.before_ssh_deploy_cluster ]]; then
+    cp -a \"\$hosts_file\" /etc/hosts.before_ssh_deploy_cluster
+fi
+
+cat \"\$tmp\" > \"\$hosts_file\"
+rm -f \"\$tmp\"
+
+# NSS 解析验证：每个 hostname 必须能解析到 hostfile 指定 IP。
+while read -r expected_ip expected_name _; do
+    [[ -z \"\$expected_ip\" || -z \"\$expected_name\" ]] && continue
+    if ! getent ahostsv4 \"\$expected_name\" 2>/dev/null | awk '{print \$1}' | grep -Fxq \"\$expected_ip\"; then
+        echo \"resolution_failed:\$expected_name:\$expected_ip\" >&2
+        rm -f \"\$map_file\"
+        exit 20
+    fi
+done < \"\$map_file\"
+
+rm -f \"\$map_file\"
+"
+
+    if ! cpu_ssh_root_cmd "$ip" "$remote_cmd" >/dev/null 2>&1; then
+        cpu_ssh "$ip" "rm -f $(printf '%q' "$remote_tmp")" >/dev/null 2>&1 || true
+        echo -e "${RED}[Hosts FAIL] $ip 更新或解析验证失败${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}[Hosts PASS] $ip /etc/hosts 已同步${NC}"
+    return 0
+}
+
+sync_cluster_hosts() {
+    local map_file
+    map_file=$(mktemp)
+
+    if ! build_cluster_hosts_map "$map_file"; then
+        rm -f "$map_file"
+        return 1
+    fi
+
+    local rc=0
+    local -a pids=()
+    local ip
+
+    for ip in "${HOSTS[@]}"; do
+        sync_hosts_on_node "$ip" "$map_file" &
+        pids+=("$!")
+
+        if (( ${#pids[@]} >= BATCH_SIZE )); then
+            wait_pid_batch "${pids[@]}" || rc=1
+            pids=()
+        fi
+    done
+
+    if (( ${#pids[@]} > 0 )); then
+        wait_pid_batch "${pids[@]}" || rc=1
+    fi
+
+    rm -f "$map_file"
+    return "$rc"
+}
+
 build_cluster_known_hosts() {
     [[ "$MODE" == "full" ]] || return 0
 
@@ -385,7 +562,7 @@ build_cluster_known_hosts() {
 
     echo -e "${BLUE}[System] 收集 GPU 节点 Host Key + hostname/FQDN...${NC}"
 
-    local ip short_name fqdn aliases scan_host
+    local ip short_name fqdn desired_name aliases scan_host
     local scan_file
     scan_file=$(mktemp)
 
@@ -396,13 +573,21 @@ build_cluster_known_hosts() {
         short_name=$(cpu_ssh "$ip" 'hostname -s 2>/dev/null || hostname' 2>/dev/null | head -n1 | tr -d '\r' || true)
         fqdn=$(cpu_ssh "$ip" 'hostname -f 2>/dev/null || hostname' 2>/dev/null | head -n1 | tr -d '\r' || true)
 
-        HOSTNAME_BY_IP["$ip"]="$short_name"
+        desired_name="${DESIRED_HOSTNAME_BY_IP[$ip]:-}"
+        if (( SYNC_HOSTS == 1 )) && [[ -n "$desired_name" ]]; then
+            HOSTNAME_BY_IP["$ip"]="$desired_name"
+        else
+            HOSTNAME_BY_IP["$ip"]="$short_name"
+        fi
 
         aliases="$ip"
-        if [[ -n "$short_name" && "$short_name" != "$ip" ]]; then
+        if [[ -n "$desired_name" && "$desired_name" != "$ip" ]]; then
+            aliases+=",$desired_name"
+        fi
+        if [[ -n "$short_name" && "$short_name" != "$ip" && "$short_name" != "$desired_name" ]]; then
             aliases+=",$short_name"
         fi
-        if [[ -n "$fqdn" && "$fqdn" != "$ip" && "$fqdn" != "$short_name" ]]; then
+        if [[ -n "$fqdn" && "$fqdn" != "$ip" && "$fqdn" != "$short_name" && "$fqdn" != "$desired_name" ]]; then
             aliases+=",$fqdn"
         fi
 
@@ -692,6 +877,7 @@ main() {
     run_batched verify_cpu_to_gpu_node "${HOSTS[@]}" || cpu_verify_rc=1
 
     local hostname_rc=0
+    local hosts_rc=0
     local hostkey_rc=0
     local cluster_install_rc=0
     local gpu_verify_rc=0
@@ -706,20 +892,32 @@ main() {
         echo -e "${BLUE}[System] 阶段 3: 未指定 -N，跳过服务器主机名修改${NC}"
     fi
 
-    if [[ "$MODE" == "full" ]]; then
-        echo -e "${YELLOW}=== 阶段 4: 构建 IP/hostname/FQDN known_hosts + 安装 GPU 集群互信 ===${NC}"
-
+    if (( SYNC_HOSTS == 1 )); then
+        echo -e "${YELLOW}=== 阶段 4: 将 hostfile IP/hostname 映射同步到所有节点 /etc/hosts ===${NC}"
         if (( hostname_rc != 0 )); then
+            hosts_rc=1
+            echo -e "${RED}[Error] 主机名配置存在失败项，跳过 /etc/hosts 同步${NC}"
+        else
+            sync_cluster_hosts || hosts_rc=1
+        fi
+    else
+        echo -e "${BLUE}[System] 阶段 4: 未指定 -H，跳过 /etc/hosts 同步${NC}"
+    fi
+
+    if [[ "$MODE" == "full" ]]; then
+        echo -e "${YELLOW}=== 阶段 5: 构建 IP/hostname/FQDN known_hosts + 安装 GPU 集群互信 ===${NC}"
+
+        if (( hostname_rc != 0 || hosts_rc != 0 )); then
             hostkey_rc=1
             cluster_install_rc=1
-            echo -e "${RED}[Error] 主机名配置存在失败项，为避免生成错误的 known_hosts，跳过 Full 互信安装${NC}"
+            echo -e "${RED}[Error] hostname 或 /etc/hosts 配置存在失败项，为避免生成错误状态，跳过 Full 互信安装${NC}"
         elif ! build_cluster_known_hosts; then
             hostkey_rc=1
         else
             run_batched process_full_node "${HOSTS[@]}" || cluster_install_rc=1
         fi
 
-        echo -e "${YELLOW}=== 阶段 5: GPU -> GPU 互信验证 | $FULL_VERIFY ===${NC}"
+        echo -e "${YELLOW}=== 阶段 6: GPU -> GPU 互信验证 | $FULL_VERIFY ===${NC}"
 
         if (( hostkey_rc == 0 && cluster_install_rc == 0 )); then
             if [[ "$FULL_VERIFY" == "all" ]]; then
@@ -740,6 +938,7 @@ main() {
     echo "MODE                : $MODE"
     echo "Node count          : ${#HOSTS[@]}"
     echo "Set hostname        : $([[ $SET_HOSTNAME -eq 1 ]] && echo yes || echo no)"
+    echo "Sync /etc/hosts     : $([[ $SYNC_HOSTS -eq 1 ]] && echo yes || echo no)"
     echo "CPU key             : $CPU_PRI_KEY"
     if [[ "$MODE" == "full" ]]; then
         echo "GPU cluster key dir : $CLUSTER_KEY_DIR"
@@ -747,7 +946,7 @@ main() {
         echo "GPU verify mode     : $FULL_VERIFY"
     fi
 
-    if (( deploy_rc != 0 || cpu_verify_rc != 0 || hostname_rc != 0 || hostkey_rc != 0 || cluster_install_rc != 0 || gpu_verify_rc != 0 )); then
+    if (( deploy_rc != 0 || cpu_verify_rc != 0 || hostname_rc != 0 || hosts_rc != 0 || hostkey_rc != 0 || cluster_install_rc != 0 || gpu_verify_rc != 0 )); then
         echo -e "${RED}Result: 存在失败项，请查看上面的 FAIL/Error 输出${NC}"
         exit 1
     fi
